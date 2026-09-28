@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LogistiTrack Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "event_type", "order_id", "source", "timestamp", "version", "payload"],
+  "properties": {
+    "event_id": {"type": "string", "format": "uuid"},
+    "event_type": {"type": "string", "minLength": 3},
+    "order_id": {"type": "string", "pattern": "^PED-[0-9]{6}$"},
+    "source": {"type": "string", "minLength": 2},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "version": {"const": 1},
+    "payload": {"type": "object"}
+  }
+}
+

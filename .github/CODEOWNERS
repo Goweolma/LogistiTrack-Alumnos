@@ -1,0 +1,11 @@
+# Sustituir Goweolma si el repositorio pertenece a otra cuenta.
+* @Goweolma
+
+/services/orders/ @Goweolma
+/services/inventory/ @Goweolma
+/services/warehouse/ @Goweolma
+/services/delivery/ @Goweolma
+/frontend/ @Goweolma
+/compose.yaml @Goweolma
+/docs/ @Goweolma
+
