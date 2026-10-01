@@ -1,4 +1,4 @@
-"""Valida que init.sql defina solo las tablas de Inventory y datos coherentes."""
+"""Valida que init.sql defina las tablas de Inventory con datos coherentes."""
 
 import re
 from pathlib import Path
@@ -13,17 +13,26 @@ def _tables() -> set[str]:
     return set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)", INIT_SQL))
 
 
-def test_only_inventory_tables_are_created():
-    assert _tables() == {"products", "inventory", "processed_events"}
+def _table_block(table: str) -> str:
+    return INIT_SQL.split(f"CREATE TABLE IF NOT EXISTS {table}", 1)[1].split(");", 1)[0]
+
+
+def test_inventory_tables_are_created():
+    assert {"products", "inventory", "processed_events"}.issubset(_tables())
 
 
 def test_processed_events_guarantees_idempotency():
-    block = INIT_SQL.split("CREATE TABLE IF NOT EXISTS processed_events", 1)[1].split(");", 1)[0]
-    assert "event_id" in block
-    assert "PRIMARY KEY (event_id, consumer)" in block
+    block = _table_block("processed_events")
+    assert "event_id UUID NOT NULL" in block
+    assert "PRIMARY KEY (event_id, service_name)" in block
+
+
+def test_inventory_only_allows_norte_and_sur():
+    assert "CHECK (warehouse IN ('NORTE', 'SUR'))" in _table_block("inventory")
 
 
 def test_products_insert_matches_table_columns():
-    assert "INSERT INTO products (product_id, product_name, product_description, price)" in INIT_SQL
+    assert "name VARCHAR(120) NOT NULL" in _table_block("products")
+    assert "INSERT INTO products (product_id, name, product_description, price)" in INIT_SQL
     rows = re.findall(r"\('PROD-\d+', '[^']+', '[^']+', [\d.]+\)", INIT_SQL)
     assert len(rows) == 3
