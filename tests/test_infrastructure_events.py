@@ -37,14 +37,23 @@ class RecordingProducer:
 
 
 def test_validate_event_accepts_contract_event():
-    validate_event(build_event("ORDER_CREATED", "PED-000001", "orders", {"quantity": 1}))
+    event = build_event("ORDER_CREATED", "PED-000001", "orders", {"quantity": 1})
+
+    validate_event(event)
+
+
+def test_validate_event_rejects_invalid_event():
+    event = build_event("ORDER_CREATED", "PED-000001", "orders", {"quantity": 1})
+    event["order_id"] = "ORDER-1"
+
+    with pytest.raises(ValueError):
+        validate_event(event)
 
 
 @pytest.mark.parametrize(
     ("field", "value"),
     [
         ("event_id", "not-a-uuid"),
-        ("order_id", "ORDER-1"),
         ("timestamp", "2026-09-29T18:00:00"),
         ("version", 2),
         ("payload", []),
