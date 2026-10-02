@@ -36,10 +36,11 @@ def initialize_storage() -> None:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                CREATE TABLE IF NOT EXISTS warehouse_processed_events (
-                    event_id UUID PRIMARY KEY,
-                    order_id VARCHAR(20) NOT NULL,
-                    processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                CREATE TABLE IF NOT EXISTS processed_events (
+                    event_id VARCHAR(64) NOT NULL,
+                    consumer VARCHAR(40) NOT NULL,
+                    processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (event_id, consumer)
                 )
                 """
             )
@@ -60,31 +61,35 @@ def event_was_processed(event_id: str) -> bool:
             cursor.execute(
                 """
                 SELECT 1
-                FROM warehouse_processed_events
-                WHERE event_id = %s
+                FROM processed_events
+                WHERE event_id = %s AND consumer = %s
                 """,
-                (event_id,),
+                (event_id, SERVICE_NAME),
             )
             return cursor.fetchone() is not None
 
 
-def mark_event_processed(event_id: str, order_id: str) -> None:
-    """Guarda el event_id después de preparar correctamente el pedido."""
+def mark_event_processed(event_id: str) -> None:
+    """Registra que Warehouse procesó el evento."""
     with get_connection() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                INSERT INTO warehouse_processed_events (event_id, order_id)
+                INSERT INTO processed_events (event_id, consumer)
                 VALUES (%s, %s)
-                ON CONFLICT (event_id) DO NOTHING
+                ON CONFLICT (event_id, consumer) DO NOTHING
                 """,
-                (event_id, order_id),
+                (event_id, SERVICE_NAME),
             )
-
+            
 def calculate_preparation_seconds(payload: dict[str, Any]) -> float:
     """Calcula el tiempo de preparación según cantidad y tipo de producto."""
     try:
-        base_seconds = float(os.getenv("PREPARATION_DELAY_SECONDS", "3"))
+        base_seconds = max(
+            0.0,
+            float(os.getenv("PREPARATION_DELAY_SECONDS", "3")),
+        )   
+        
     except ValueError:
         base_seconds = 3.0
 
@@ -212,8 +217,8 @@ def process_inventory_event(event: dict[str, Any], producer) -> str:
     publish(producer, WAREHOUSE_TOPIC, order_ready_event)
 
     # Se registra hasta que todas las publicaciones terminaron.
-    mark_event_processed(event["event_id"], order_id)
-
+    mark_event_processed(event["event_id"])
+    
     logging.info(
         "Pedido listo order_id=%s event_id=%s",
         order_id,

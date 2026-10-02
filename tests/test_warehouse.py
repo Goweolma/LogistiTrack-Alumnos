@@ -76,9 +76,7 @@ def test_publishes_preparing_ready_and_order_ready(monkeypatch):
     monkeypatch.setattr(
         warehouse,
         "mark_event_processed",
-        lambda event_id, order_id: marked.append(
-            (event_id, order_id)
-        ),
+        lambda event_id: marked.append(event_id),
     )
 
     result = warehouse.process_inventory_event(
@@ -104,7 +102,7 @@ def test_publishes_preparing_ready_and_order_ready(monkeypatch):
     ]
 
     assert marked == [
-        (event["event_id"], event["order_id"])
+        event["event_id"]
     ]
 
 
@@ -133,3 +131,19 @@ def test_does_not_process_duplicate_event(monkeypatch):
 
     assert result == "duplicate"
     assert published == []
+
+def test_negative_preparation_delay_becomes_zero(monkeypatch):
+    monkeypatch.setenv("PREPARATION_DELAY_SECONDS", "-5")
+
+    seconds = warehouse.calculate_preparation_seconds(
+        {
+            "items": [
+                {
+                    "quantity": 2,
+                    "product_type": "normal",
+                }
+            ]
+        }
+    )
+
+    assert seconds == 0.0
