@@ -20,7 +20,28 @@ CREATE TABLE IF NOT EXISTS processed_events (
     PRIMARY KEY (event_id, service_name)
 );
 
--- TODO(ALUMNO-1): diseñar orders y order_history.
+-- ALUMNO-1: tablas de pedidos.
+CREATE TABLE IF NOT EXISTS orders (
+    order_id VARCHAR(40) PRIMARY KEY,
+    total NUMERIC(10, 2) NOT NULL CHECK (total >= 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    delivery_address VARCHAR(200) NOT NULL,
+    status VARCHAR(30) NOT NULL DEFAULT 'RECEIVED'
+);
+
+CREATE TABLE IF NOT EXISTS order_history (
+    history_id SERIAL PRIMARY KEY,
+    order_id VARCHAR(40) NOT NULL REFERENCES orders(order_id),
+    status VARCHAR(30) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS order_items (
+    order_id VARCHAR(40) NOT NULL REFERENCES orders(order_id),
+    product_id VARCHAR(40) NOT NULL REFERENCES products(product_id),
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    PRIMARY KEY (order_id, product_id)
+);
 
 INSERT INTO products (product_id, name, product_description, price) VALUES
     ('PROD-001', 'Laptop empresarial', 'Laptop de 14 pulgadas para uso corporativo', 18999.00),
