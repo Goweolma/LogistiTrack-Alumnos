@@ -3,6 +3,7 @@
 import os
 
 from flask import Flask, jsonify, request
+from common.database import get_connection
 
 app = Flask(__name__)
 
@@ -31,14 +32,84 @@ def list_products():
 
 @app.get("/api/orders")
 def list_orders():
-    # TODO(ALUMNO-1): devolver pedidos desde PostgreSQL.
-    return jsonify([])
+    try:
+        with get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT order_id, total, created_at, delivery_address, status
+                    FROM orders
+                    ORDER BY created_at DESC
+                    """
+                )
+                rows = cursor.fetchall()
+
+    except Exception:
+        return jsonify({"error": "DATABASE_UNAVAILABLE"}), 503
+
+    orders = [
+        {
+            "order_id": order_id,
+            "total": float(total),
+            "created_at": created_at.isoformat(),
+            "delivery_address": delivery_address,
+            "status": status,
+        }
+        for order_id, total, created_at, delivery_address, status in rows
+    ]
+
+    return jsonify(orders)
+    
 
 
 @app.get("/api/orders/<order_id>")
 def get_order(order_id: str):
-    # TODO(ALUMNO-1): devolver pedido e historial, o 404.
-    return jsonify({"error": "NOT_IMPLEMENTED", "order_id": order_id}), 501
+    try:
+        with get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT order_id, total, created_at, delivery_address, status
+                    FROM orders
+                    WHERE order_id = %s
+                    """,
+                    (order_id,),
+                )
+                order = cursor.fetchone()
+
+                if order is None:
+                    return jsonify({"error": "ORDER_NOT_FOUND", "order_id": order_id}), 404
+
+                cursor.execute(
+                    """
+                    SELECT status, created_at
+                    FROM order_history
+                    WHERE order_id = %s
+                    ORDER BY created_at
+                    """,
+                    (order_id,),
+                )
+
+                history_rows = cursor.fetchall()
+
+    except Exception:
+        return jsonify({"error": "DATABASE_UNAVAILABLE"}), 503
+    return jsonify(
+        {
+            "order_id": order[0],
+            "total": float(order[1]),
+            "created_at": order[2].isoformat(),
+            "delivery_address": order[3],
+            "status": order[4],
+            "history": [
+                {
+                    "status": status,
+                    "created_at": created_at.isoformat(),
+                }
+                for status, created_at in history_rows
+            ],
+        }
+    )
 
 
 @app.post("/api/orders")
