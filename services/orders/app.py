@@ -1,5 +1,6 @@
 """API base de pedidos. Responsable: Alumno 1."""
 
+import logging
 import os
 
 from flask import Flask, jsonify, request
@@ -45,6 +46,7 @@ def list_orders():
                 rows = cursor.fetchall()
 
     except Exception:
+        logging.exception("Error al consultar la lista de pedidos")
         return jsonify({"error": "DATABASE_UNAVAILABLE"}), 503
 
     orders = [
@@ -75,25 +77,45 @@ def get_order(order_id: str):
                     """,
                     (order_id,),
                 )
+
                 order = cursor.fetchone()
 
                 if order is None:
-                    return jsonify({"error": "ORDER_NOT_FOUND", "order_id": order_id}), 404
+                    return jsonify(
+                        {
+                            "error": "ORDER_NOT_FOUND",
+                            "order_id": order_id,
+                        }
+                    ), 404
 
                 cursor.execute(
                     """
                     SELECT status, created_at
                     FROM order_history
                     WHERE order_id = %s
-                    ORDER BY created_at
+                    ORDER BY history_id
                     """,
                     (order_id,),
                 )
 
                 history_rows = cursor.fetchall()
 
+                cursor.execute(
+                    """
+                    SELECT product_id, quantity
+                    FROM order_items
+                    WHERE order_id = %s
+                    ORDER BY product_id
+                    """,
+                    (order_id,),
+                )
+
+                item_rows = cursor.fetchall()
+
     except Exception:
+        logging.exception("Error al consultar el detalle del pedido")
         return jsonify({"error": "DATABASE_UNAVAILABLE"}), 503
+
     return jsonify(
         {
             "order_id": order[0],
@@ -107,6 +129,13 @@ def get_order(order_id: str):
                     "created_at": created_at.isoformat(),
                 }
                 for status, created_at in history_rows
+            ],
+            "items": [
+                {
+                    "product_id": product_id,
+                    "quantity": quantity,
+                }
+                for product_id, quantity in item_rows
             ],
         }
     )
