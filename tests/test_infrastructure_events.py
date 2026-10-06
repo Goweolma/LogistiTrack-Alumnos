@@ -1,25 +1,8 @@
 import json
-import sys
-from types import ModuleType
 
 import pytest
 
 from common.events import build_event, validate_event
-
-try:
-    import confluent_kafka  # noqa: F401
-except ModuleNotFoundError:
-    kafka_stub = ModuleType("confluent_kafka")
-
-    class Consumer:  # pragma: no cover - solo permite probar sin Kafka local
-        pass
-
-    class Producer:  # pragma: no cover - solo permite probar sin Kafka local
-        pass
-
-    kafka_stub.Consumer = Consumer
-    kafka_stub.Producer = Producer
-    sys.modules["confluent_kafka"] = kafka_stub
 
 from common.kafka_client import create_consumer, publish
 
