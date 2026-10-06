@@ -1,44 +1,613 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LogistiTrack | Base alumnos</title>
-  <link rel="stylesheet" href="/css/styles.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Rayo | Envíos rápidos y seguros</title>
+
+    <link rel="stylesheet" href="css/styles.css">
 </head>
+
 <body>
-  <main class="container">
-    <header>
-      <p class="eyebrow">Sistemas Distribuidos</p>
-      <h1>LogistiTrack</h1>
-      <p>Base colaborativa para siete integrantes</p>
+
+    <!-- HEADER -->
+    <header class="header">
+
+        <div class="logo">
+            ⚡ <span>Rayo</span>
+        </div>
+
+        <nav class="navbar">
+            <a href="#inicio">Inicio</a>
+            <a href="#seguimiento">Seguimiento</a>
+            <a href="#envios">Mis envíos</a>
+            <a href="#historial">Historial</a>
+        </nav>
+
+        <div class="header-actions">
+            <button class="notification-btn" id="notificationBtn">
+                🔔
+                <span class="notification-badge">2</span>
+            </button>
+
+            <div class="profile">
+                <div class="profile-avatar">N</div>
+                <span>Naidelin</span>
+            </div>
+        </div>
+
     </header>
 
-    <section class="card">
-      <div class="status-row">
-        <div>
-          <h2>Estado de la plataforma</h2>
-          <p id="message">Comprobando conexión...</p>
+
+    <!-- HERO -->
+    <main>
+
+        <section class="hero" id="inicio">
+
+            <div class="hero-content">
+
+                <span class="hero-tag">⚡ Envíos rápidos y seguros</span>
+
+                <h1>
+                    Tu paquete,
+                    <span>siempre en camino.</span>
+                </h1>
+
+                <p>
+                    Envía, rastrea y administra tus paquetes desde un solo lugar.
+                    Con Rayo sabes dónde está tu envío en todo momento.
+                </p>
+
+                <div class="hero-buttons">
+                    <button class="primary-btn" id="newShipmentBtn">
+                        📦 Crear envío
+                    </button>
+
+                    <button class="secondary-btn" id="heroTrackBtn">
+                        🔎 Rastrear paquete
+                    </button>
+                </div>
+
+            </div>
+
+
+            <div class="tracking-card">
+
+                <div class="tracking-header">
+                    <div>
+                        <small>RASTREA TU PAQUETE</small>
+                        <h3>¿Dónde está mi envío?</h3>
+                    </div>
+
+                    <span class="tracking-icon">📍</span>
+                </div>
+
+                <div class="tracking-input">
+
+                    <input
+                        type="text"
+                        id="trackingInput"
+                        placeholder="Ingresa tu número de guía"
+                    >
+
+                    <button id="trackBtn">
+                        Rastrear
+                    </button>
+
+                </div>
+
+                <div class="example">
+                    Ejemplo: RAYO-2026-00125
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- ESTADÍSTICAS -->
+        <section class="stats">
+
+            <div class="stat-card">
+                <div class="stat-icon">📦</div>
+                <div>
+                    <strong id="totalShipments">12</strong>
+                    <span>Envíos totales</span>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon">🚚</div>
+                <div>
+                    <strong id="activeShipments">4</strong>
+                    <span>En tránsito</span>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon">✅</div>
+                <div>
+                    <strong>8</strong>
+                    <span>Entregados</span>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-icon">⚡</div>
+                <div>
+                    <strong>98%</strong>
+                    <span>Entregas exitosas</span>
+                </div>
+            </div>
+
+        </section>
+
+
+        <!-- SEGUIMIENTO -->
+        <section class="section" id="seguimiento">
+
+            <div class="section-header">
+
+                <div>
+                    <span class="section-label">SEGUIMIENTO</span>
+                    <h2>Monitorea tu paquete</h2>
+                    <p>
+                        Consulta el estado actual de tus envíos.
+                    </p>
+                </div>
+
+                <button class="outline-btn" id="refreshBtn">
+                    ↻ Actualizar
+                </button>
+
+            </div>
+
+
+            <div class="tracking-result" id="trackingResult">
+
+                <div class="package-header">
+
+                    <div class="package-info">
+
+                        <div class="package-icon">
+                            📦
+                        </div>
+
+                        <div>
+                            <span class="guide-label">Número de guía</span>
+
+                            <h3 id="resultGuide">
+                                RAYO-2026-00125
+                            </h3>
+
+                            <span class="package-route">
+                                Aguascalientes → Guadalajara
+                            </span>
+                        </div>
+
+                    </div>
+
+                    <span class="status status-transit" id="resultStatus">
+                        🚚 En tránsito
+                    </span>
+
+                </div>
+
+
+                <!-- PROGRESO -->
+                <div class="progress-container">
+
+                    <div class="progress-line">
+
+                        <div
+                            class="progress-fill"
+                            id="progressFill"
+                            style="width: 66%;"
+                        ></div>
+
+                    </div>
+
+                    <div class="progress-steps">
+
+                        <div class="progress-step completed">
+                            <div class="step-circle">✓</div>
+                            <span>Pedido creado</span>
+                        </div>
+
+                        <div class="progress-step completed">
+                            <div class="step-circle">✓</div>
+                            <span>Recogido</span>
+                        </div>
+
+                        <div class="progress-step active">
+                            <div class="step-circle">🚚</div>
+                            <span>En tránsito</span>
+                        </div>
+
+                        <div class="progress-step">
+                            <div class="step-circle">✓</div>
+                            <span>Entregado</span>
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- INFORMACIÓN -->
+                <div class="package-details">
+
+                    <div>
+                        <span>Origen</span>
+                        <strong>Aguascalientes, Ags.</strong>
+                    </div>
+
+                    <div>
+                        <span>Destino</span>
+                        <strong>Guadalajara, Jal.</strong>
+                    </div>
+
+                    <div>
+                        <span>Entrega estimada</span>
+                        <strong>07 Octubre 2026</strong>
+                    </div>
+
+                    <div>
+                        <span>Transportista</span>
+                        <strong>Rayo Express</strong>
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- MIS ENVÍOS -->
+        <section class="section" id="envios">
+
+            <div class="section-header">
+
+                <div>
+                    <span class="section-label">MIS ENVÍOS</span>
+                    <h2>Mis paquetes</h2>
+                </div>
+
+                <button class="primary-btn" id="createShipmentBtn">
+                    + Nuevo envío
+                </button>
+
+            </div>
+
+
+            <!-- FILTROS -->
+            <div class="filters">
+
+                <div class="search-box">
+
+                    <span>🔎</span>
+
+                    <input
+                        type="text"
+                        id="shipmentSearch"
+                        placeholder="Buscar por número de guía..."
+                    >
+
+                </div>
+
+                <select id="statusFilter">
+                    <option value="all">Todos los estados</option>
+                    <option value="transit">En tránsito</option>
+                    <option value="delivered">Entregado</option>
+                    <option value="pending">Pendiente</option>
+                </select>
+
+            </div>
+
+
+            <!-- TABLA -->
+            <div class="table-container">
+
+                <table>
+
+                    <thead>
+
+                        <tr>
+                            <th>Número de guía</th>
+                            <th>Destino</th>
+                            <th>Fecha</th>
+                            <th>Estado</th>
+                            <th>Acciones</th>
+                        </tr>
+
+                    </thead>
+
+                    <tbody id="shipmentsTable">
+
+                        <tr>
+                            <td>
+                                <strong>RAYO-2026-00125</strong>
+                            </td>
+
+                            <td>Guadalajara, Jal.</td>
+
+                            <td>05 Oct 2026</td>
+
+                            <td>
+                                <span class="status status-transit">
+                                    🚚 En tránsito
+                                </span>
+                            </td>
+
+                            <td>
+                                <button
+                                    class="table-btn track-shipment"
+                                    data-guide="RAYO-2026-00125"
+                                >
+                                    Ver
+                                </button>
+                            </td>
+                        </tr>
+
+
+                        <tr>
+                            <td>
+                                <strong>RAYO-2026-00118</strong>
+                            </td>
+
+                            <td>León, Gto.</td>
+
+                            <td>03 Oct 2026</td>
+
+                            <td>
+                                <span class="status status-delivered">
+                                    ✓ Entregado
+                                </span>
+                            </td>
+
+                            <td>
+                                <button
+                                    class="table-btn track-shipment"
+                                    data-guide="RAYO-2026-00118"
+                                >
+                                    Ver
+                                </button>
+                            </td>
+                        </tr>
+
+
+                        <tr>
+                            <td>
+                                <strong>RAYO-2026-00131</strong>
+                            </td>
+
+                            <td>CDMX</td>
+
+                            <td>05 Oct 2026</td>
+
+                            <td>
+                                <span class="status status-pending">
+                                    ⏳ Pendiente
+                                </span>
+                            </td>
+
+                            <td>
+                                <button
+                                    class="table-btn track-shipment"
+                                    data-guide="RAYO-2026-00131"
+                                >
+                                    Ver
+                                </button>
+                            </td>
+                        </tr>
+
+                    </tbody>
+
+                </table>
+
+            </div>
+
+        </section>
+
+
+        <!-- HISTORIAL -->
+        <section class="section" id="historial">
+
+            <div class="section-header">
+
+                <div>
+                    <span class="section-label">ACTIVIDAD</span>
+                    <h2>Actividad reciente</h2>
+                </div>
+
+            </div>
+
+
+            <div class="activity-list">
+
+                <div class="activity-item">
+
+                    <div class="activity-icon delivered">
+                        ✓
+                    </div>
+
+                    <div>
+                        <strong>Paquete entregado</strong>
+                        <p>
+                            RAYO-2026-00118 fue entregado correctamente.
+                        </p>
+                        <small>Hace 2 horas</small>
+                    </div>
+
+                </div>
+
+
+                <div class="activity-item">
+
+                    <div class="activity-icon transit">
+                        🚚
+                    </div>
+
+                    <div>
+                        <strong>Paquete en tránsito</strong>
+                        <p>
+                            RAYO-2026-00125 salió del centro de distribución.
+                        </p>
+                        <small>Hace 4 horas</small>
+                    </div>
+
+                </div>
+
+
+                <div class="activity-item">
+
+                    <div class="activity-icon created">
+                        📦
+                    </div>
+
+                    <div>
+                        <strong>Nuevo envío creado</strong>
+                        <p>
+                            Se generó el envío RAYO-2026-00131.
+                        </p>
+                        <small>Hoy, 10:35 AM</small>
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+    </main>
+
+
+    <!-- MODAL NUEVO ENVÍO -->
+    <div class="modal" id="shipmentModal">
+
+        <div class="modal-content">
+
+            <button class="close-modal" id="closeModal">
+                ×
+            </button>
+
+            <h2>Crear nuevo envío</h2>
+
+            <p>
+                Ingresa los datos de tu paquete.
+            </p>
+
+            <form id="shipmentForm">
+
+                <label>
+                    Nombre del destinatario
+                    <input
+                        type="text"
+                        id="recipient"
+                        required
+                    >
+                </label>
+
+                <label>
+                    Dirección de destino
+                    <input
+                        type="text"
+                        id="destination"
+                        required
+                    >
+                </label>
+
+                <label>
+                    Ciudad
+                    <input
+                        type="text"
+                        id="city"
+                        required
+                    >
+                </label>
+
+                <label>
+                    Peso del paquete
+                    <input
+                        type="number"
+                        id="weight"
+                        min="0.1"
+                        step="0.1"
+                        required
+                    >
+                </label>
+
+                <button
+                    type="submit"
+                    class="primary-btn full-btn"
+                >
+                    ⚡ Crear envío
+                </button>
+
+            </form>
+
         </div>
-        <span id="status" class="badge">CARGANDO</span>
-      </div>
-    </section>
 
-    <section class="grid">
-      <article class="card"><strong>Pedidos</strong><p>TODO Alumno 1</p></article>
-      <article class="card"><strong>Inventario</strong><p>TODO Alumno 2</p></article>
-      <article class="card"><strong>Almacén</strong><p>TODO Alumno 3</p></article>
-      <article class="card"><strong>Entrega</strong><p>TODO Alumno 4</p></article>
-      <article class="card"><strong>Infraestructura</strong><p>TODO Alumno 5</p></article>
-      <article class="card"><strong>Dashboard</strong><p>TODO Alumno 6</p></article>
-      <article class="card"><strong>QA y manual</strong><p>TODO Alumno 7</p></article>
-    </section>
+    </div>
 
-    <section class="card">
-      <h2>Siguiente meta del equipo</h2>
-      <code>POST /api/orders → ORDER_CREATED → INVENTORY_RESERVED</code>
-    </section>
-  </main>
-  <script src="/js/app.js"></script>
+
+    <!-- NOTIFICACIONES -->
+    <div class="notification-panel" id="notificationPanel">
+
+        <div class="notification-header">
+            <h3>Notificaciones</h3>
+
+            <button id="closeNotifications">
+                ×
+            </button>
+        </div>
+
+        <div class="notification">
+
+            <span>🚚</span>
+
+            <div>
+                <strong>Paquete en tránsito</strong>
+                <p>RAYO-2026-00125 está en camino.</p>
+            </div>
+
+        </div>
+
+        <div class="notification">
+
+            <span>✓</span>
+
+            <div>
+                <strong>Paquete entregado</strong>
+                <p>RAYO-2026-00118 fue entregado.</p>
+            </div>
+
+        </div>
+
+    </div>
+
+
+    <!-- FOOTER -->
+    <footer>
+
+        <div class="footer-logo">
+            ⚡ Rayo
+        </div>
+
+        <p>
+            Envíos rápidos, seguros y fáciles de rastrear.
+        </p>
+
+        <span>
+            © 2026 Rayo. Todos los derechos reservados.
+        </span>
+
+    </footer>
+
+
+    <script src="js/app.js"></script>
+
 </body>
 </html>
