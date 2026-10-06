@@ -27,6 +27,14 @@ def test_processed_events_guarantees_idempotency():
     assert "PRIMARY KEY (event_id, service_name)" in block
 
 
+def test_inventory_reservations_keeps_one_result_per_event():
+    block = _table_block("inventory_reservations")
+    assert "event_id UUID NOT NULL PRIMARY KEY" in block
+    assert "CHECK (status IN ('INVENTORY_RESERVED', 'INVENTORY_REJECTED'))" in block
+    assert "CHECK (warehouse IN ('NORTE', 'SUR'))" in block
+    assert "result_event JSONB NOT NULL" in block
+
+
 def test_inventory_only_allows_norte_and_sur():
     assert "CHECK (warehouse IN ('NORTE', 'SUR'))" in _table_block("inventory")
 
