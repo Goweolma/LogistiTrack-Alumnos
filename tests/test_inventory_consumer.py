@@ -1,16 +1,19 @@
 import json
 
 import pytest
+from confluent_kafka import Producer
 
 from common.events import build_event, validate_event
 import services.inventory.app as inventory
 
 
 class FakeDatabase:
-    """Simula las tablas que usa Inventory: inventory, processed_events e inventory_reservations."""
+    """Simula las tablas que usa Inventory: inventory, orders, order_history, processed_events e inventory_reservations."""
 
-    def __init__(self, stock):
+    def __init__(self, stock, orders):
         self.stock = dict(stock)
+        self.orders = dict(orders)
+        self.history = []
         self.processed = set()
         self.reservations = {}
         self.queries = []
@@ -44,6 +47,16 @@ class FakeCursor:
         elif query.startswith("SELECT result_event"):
             reservation = self.db.reservations.get(params[0])
             self.result = [(reservation["result_event"],)] if reservation else []
+        elif query.startswith("SELECT status FROM orders"):
+            assert query.endswith("FOR UPDATE")
+            status = self.pending["orders"].get(params[0])
+            self.result = [(status,)] if status else []
+        elif query.startswith("UPDATE orders SET status"):
+            status, order_id = params
+            self.pending["orders"][order_id] = status
+            self.rowcount = 1
+        elif query.startswith("INSERT INTO order_history"):
+            self.pending["history"].append(tuple(params))
         elif query.startswith("SELECT product_id, warehouse, quantity"):
             products = params[0]
             self.result = sorted(
@@ -83,6 +96,8 @@ class FakeConnection:
         self.db = db
         self.pending = {
             "stock": dict(db.stock),
+            "orders": dict(db.orders),
+            "history": [],
             "processed": set(),
             "reservations": {},
         }
@@ -93,6 +108,8 @@ class FakeConnection:
     def __exit__(self, exc_type, exc_value, traceback):
         if exc_type is None:
             self.db.stock = self.pending["stock"]
+            self.db.orders = self.pending["orders"]
+            self.db.history.extend(self.pending["history"])
             self.db.processed |= self.pending["processed"]
             self.db.reservations.update(self.pending["reservations"])
             self.db.commits += 1
@@ -112,7 +129,8 @@ def db(monkeypatch):
             ("PROD-001", "SUR"): 5,
             ("PROD-002", "NORTE"): 10,
             ("PROD-002", "SUR"): 0,
-        }
+        },
+        orders={"PED-000001": "RECEIVED"},
     )
     monkeypatch.setattr(inventory, "get_connection", lambda: FakeConnection(database))
     return database
@@ -123,7 +141,7 @@ def published(monkeypatch):
     messages = []
     monkeypatch.setattr(
         inventory,
-        "publish",
+        "publish_confirmed",
         lambda producer, topic, event: messages.append((topic, event)),
     )
     return messages
@@ -351,3 +369,151 @@ def test_consumer_does_not_commit_offset_when_database_fails(monkeypatch, publis
 
     assert consumer.committed == []
     assert published == []
+
+
+def count_queries(db, prefix):
+    return sum(query.startswith(prefix) for query in db.queries)
+
+
+def test_reservation_updates_order_status_and_history(db, published):
+    inventory.process_order_event(order_created(("PROD-001", 1)), producer=object())
+
+    assert db.orders["PED-000001"] == "INVENTORY_RESERVED"
+    assert db.history == [("PED-000001", "INVENTORY_RESERVED")]
+
+
+def test_rejection_updates_order_status_and_history(db, published):
+    inventory.process_order_event(order_created(("PROD-001", 99)), producer=object())
+
+    assert db.orders["PED-000001"] == "INVENTORY_REJECTED"
+    assert db.history == [("PED-000001", "INVENTORY_REJECTED")]
+
+
+def test_duplicate_does_not_update_order_or_insert_history_again(db, published):
+    event = order_created(("PROD-001", 1))
+
+    inventory.process_order_event(event, producer=object())
+    inventory.process_order_event(event, producer=object())
+
+    assert db.history == [("PED-000001", "INVENTORY_RESERVED")]
+    assert count_queries(db, "UPDATE orders") == 1
+    assert count_queries(db, "INSERT INTO order_history") == 1
+
+
+def test_order_status_and_history_roll_back_with_the_reservation(db, published, monkeypatch):
+    def broken_build_event(*args):
+        raise RuntimeError("fallo después de escribir historial")
+
+    monkeypatch.setattr(inventory, "build_event", broken_build_event)
+
+    with pytest.raises(RuntimeError):
+        inventory.process_order_event(order_created(("PROD-001", 1)), producer=object())
+
+    assert count_queries(db, "INSERT INTO order_history") == 1
+    assert db.orders["PED-000001"] == "RECEIVED"
+    assert db.history == []
+    assert db.stock[("PROD-001", "NORTE")] == 2
+    assert db.processed == set()
+
+
+def test_missing_order_rolls_back_and_raises_value_error(db, published):
+    event = build_event(
+        "ORDER_CREATED",
+        "PED-000777",
+        "orders",
+        {"items": [{"product_id": "PROD-001", "quantity": 1}]},
+    )
+    before = dict(db.stock)
+
+    with pytest.raises(ValueError, match="ORDER_NOT_FOUND"):
+        inventory.process_order_event(event, producer=object())
+
+    assert db.stock == before
+    assert db.processed == set()
+    assert db.history == []
+    assert published == []
+
+
+class FakeKafkaProducer:
+    """Imita confluent_kafka.Producer: el callback de entrega se ejecuta durante flush()."""
+
+    def __init__(self, error=None, deliver=True):
+        self.error = error
+        self.deliver = deliver
+        self.queue = []
+        self.messages = []
+
+    def produce(self, topic, value, on_delivery):
+        self.queue.append((topic, value, on_delivery))
+
+    def flush(self, timeout):
+        if not self.deliver:
+            return len(self.queue)
+        for topic, value, on_delivery in self.queue:
+            if self.error is None:
+                self.messages.append((topic, json.loads(value)))
+            on_delivery(self.error, None)
+        self.queue = []
+        return 0
+
+
+def result_event():
+    return build_event("INVENTORY_RESERVED", "PED-000001", "inventory", {"warehouse": "NORTE"})
+
+
+def unreachable_kafka_producer():
+    # Producer real de librdkafka sin broker disponible: la entrega falla por tiempo de espera.
+    return Producer({"bootstrap.servers": "127.0.0.1:1", "message.timeout.ms": 1000, "log_level": 0})
+
+
+def test_publish_confirmed_sends_when_broker_confirms():
+    producer = FakeKafkaProducer()
+    event = result_event()
+
+    inventory.publish_confirmed(producer, "inventory", event)
+
+    assert producer.messages == [("inventory", event)]
+
+
+@pytest.mark.parametrize(
+    "producer",
+    [FakeKafkaProducer(error="KafkaError{BROKER_NOT_AVAILABLE}"), FakeKafkaProducer(deliver=False)],
+    ids=["delivery-error", "flush-timeout"],
+)
+def test_publish_confirmed_raises_when_delivery_is_not_confirmed(producer):
+    with pytest.raises(inventory.PublishError):
+        inventory.publish_confirmed(producer, "inventory", result_event())
+
+
+def test_publish_confirmed_raises_on_real_kafka_failure():
+    with pytest.raises(inventory.PublishError):
+        inventory.publish_confirmed(unreachable_kafka_producer(), "inventory", result_event())
+
+
+def test_real_publish_failure_skips_offset_commit_and_retry_republishes_stored_result(monkeypatch, db):
+    message = FakeMessage(json.dumps(order_created(("PROD-001", 1))).encode())
+    first_attempt = FakeConsumer([message])
+    redelivery = FakeConsumer([message])
+    consumers = [first_attempt, redelivery]
+    working_producer = FakeKafkaProducer()
+    producers = [unreachable_kafka_producer(), working_producer]
+
+    monkeypatch.setattr(inventory, "create_producer", lambda: producers.pop(0))
+    monkeypatch.setattr(inventory, "create_consumer", lambda group, topics: consumers.pop(0))
+
+    def sleep(seconds):
+        if not consumers:
+            raise StopConsumer
+
+    monkeypatch.setattr(inventory.time, "sleep", sleep)
+
+    with pytest.raises(StopConsumer):
+        inventory.consume_orders()
+
+    assert first_attempt.committed == []
+    assert redelivery.committed == [message]
+
+    stored = next(iter(db.reservations.values()))["result_event"]
+    assert working_producer.messages == [("inventory", stored), ("order-status", stored)]
+    assert db.stock[("PROD-001", "NORTE")] == 1
+    assert db.history == [("PED-000001", "INVENTORY_RESERVED")]
