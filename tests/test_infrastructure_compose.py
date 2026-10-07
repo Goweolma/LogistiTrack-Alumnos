@@ -10,6 +10,16 @@ def _service_block(name: str, following: str) -> str:
     return COMPOSE.split(f"\n  {name}:", 1)[1].split(f"\n  {following}:", 1)[0]
 
 
+def test_ci_starts_the_platform_with_compose():
+    workflow = Path(__file__).resolve().parents[1].joinpath(".github", "workflows", "tests.yml")
+    text = workflow.read_text(encoding="utf-8")
+
+    assert "docker compose config --quiet" in text
+    assert "docker compose up -d --build" in text
+    assert "python scripts/health_platform.py" in text
+    assert "cp .env.example .env" in text
+
+
 def test_credentials_come_from_the_environment():
     assert "logisti123" not in COMPOSE
     assert "${POSTGRES_PASSWORD:?" in COMPOSE
