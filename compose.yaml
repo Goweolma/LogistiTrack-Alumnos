@@ -101,6 +101,11 @@ services:
       kafka-init:
         condition: service_completed_successfully
     ports: ["5002:5002"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5002/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     networks: [logistitrack]
 
   warehouse:
@@ -117,6 +122,11 @@ services:
       kafka-init:
         condition: service_completed_successfully
     ports: ["5003:5003"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5003/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     networks: [logistitrack]
 
   delivery:
@@ -133,6 +143,11 @@ services:
       kafka-init:
         condition: service_completed_successfully
     ports: ["5004:5004"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5004/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     networks: [logistitrack]
 
   frontend:
@@ -142,6 +157,11 @@ services:
       orders:
         condition: service_healthy
     ports: ["8080:80"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/frontend-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     networks: [logistitrack]
 
 volumes:
