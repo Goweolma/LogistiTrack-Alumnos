@@ -103,8 +103,10 @@ duplicados ni garantiza entrega exactamente una vez.
 
 ## Continuación del mismo día
 
-Los dos Pull Requests siguen abiertos. Cada avance quedó en su propio commit,
-sin reescribir historia y sin tocar `services/` ni `frontend/`.
+Los PR #36 y #37 ya están fusionados en `develop`. El ruleset del repositorio
+impide volver a empujar esas ramas, así que la continuación va en Pull Requests
+nuevos. Cada avance quedó en su propio commit, sin reescribir historia y sin
+tocar `services/` ni `frontend/`.
 
 En el PR de Kafka, después de exigir `DATABASE_URL` y `POSTGRES_PASSWORD` por
 entorno:
@@ -134,5 +136,9 @@ aprobadas. La suite de la rama Kafka quedó en 106. Combinadas en una rama
 local, sin publicarla, quedaron 154 aprobadas. No se ejecutó
 `docker compose down -v`.
 
-Siguen bloqueados por otros alumnos el alta real de pedidos y las columnas que
-Delivery espera y el DDL compartido no tiene.
+`POST /api/orders` sigue devolviendo 501: el alta real de pedidos continúa con
+el alumno de Orders. El PR #38 ya agregó en `init.sql` `orders.driver_id`,
+`orders.vehicle_id`, `order_history.event_id` y `order_history.event`. El
+volumen local se creó antes y Postgres no vuelve a ejecutar `init.sql`, así que
+esa base todavía no tiene esas columnas. No se ejecutó `down -v` ni un
+`ALTER` sobre los datos existentes.
