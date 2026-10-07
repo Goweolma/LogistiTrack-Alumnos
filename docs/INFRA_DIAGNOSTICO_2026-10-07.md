@@ -131,10 +131,9 @@ En el PR de salud, el script además comprueba:
 - `init.sql` está montado solo lectura en `docker-entrypoint-initdb.d`.
 
 Ejecución real del script después de esos tres commits: todas las líneas en
-`[OK]` y código de salida 0. La suite de esta rama quedó en 135 pruebas
-aprobadas. La suite de la rama Kafka quedó en 106. Combinadas en una rama
-local, sin publicarla, quedaron 154 aprobadas. No se ejecutó
-`docker compose down -v`.
+`[OK]` y código de salida 0. Tras fusionar `develop` actual, la suite de esta
+rama quedó en 144 pruebas aprobadas y la de Kafka en 140. Antes de esa fusión,
+la combinación local había dado 154. No se ejecutó `docker compose down -v`.
 
 `POST /api/orders` sigue devolviendo 501: el alta real de pedidos continúa con
 el alumno de Orders. El PR #38 ya agregó en `init.sql` `orders.driver_id`,
