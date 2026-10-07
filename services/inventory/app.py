@@ -10,7 +10,13 @@ from typing import Any
 from flask import Flask, jsonify
 from common.database import get_connection
 from common.events import build_event, validate_event
-from common.kafka_client import create_consumer, create_producer, publish_dead_letter
+from common.kafka_client import (
+    PublishError as BrokerPublishError,
+    create_consumer,
+    create_producer,
+    publish_confirmed as confirm_publish,
+    publish_dead_letter,
+)
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s inventory %(message)s")
@@ -203,17 +209,12 @@ class PublishError(RuntimeError):
 
 
 def publish_confirmed(producer, topic: str, event: dict[str, Any]) -> None:
-    """Publica y espera la confirmación del broker; el helper común no revisa el resultado de flush."""
+    """Confirma la entrega con el helper común y conserva el error de este servicio."""
     validate_event(event)
-    results = []
-    producer.produce(
-        topic,
-        json.dumps(event).encode("utf-8"),
-        on_delivery=lambda error, message: results.append(error),
-    )
-    remaining = producer.flush(10)
-    if remaining or not results or results[0] is not None:
-        raise PublishError(f"Kafka no confirmó {event['event_type']} en {topic}: {results or 'sin respuesta'}")
+    try:
+        confirm_publish(producer, topic, event, timeout=10)
+    except BrokerPublishError as exc:
+        raise PublishError(str(exc)) from exc
 
 
 def process_order_event(event: dict[str, Any], producer) -> str:

@@ -30,7 +30,7 @@ from uuid import UUID, NAMESPACE_URL, uuid5
 from flask import Flask, jsonify
 from common.database import get_connection
 from common.events import build_event, validate_event
-from common.kafka_client import create_consumer, create_producer
+from common.kafka_client import PublishError, create_consumer, create_producer, publish_confirmed as confirm_publish
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s delivery %(message)s")
@@ -71,14 +71,16 @@ def decode_event(raw):
 
 
 def publish_confirmed(producer, topic, event):
-    # El helper común no comprueba la entrega: esperamos confirmación aquí.
-    results = []
-    producer.produce(topic, key=event["order_id"].encode(),
-                     value=json.dumps(event).encode(),
-                     on_delivery=lambda error, message: results.append(error))
-    remaining = producer.flush(10)
-    if remaining or not results or results[0] is not None:
-        raise RetryLater(f"Kafka no confirmó {topic}: {results}")
+    try:
+        confirm_publish(
+            producer,
+            topic,
+            event,
+            key=event["order_id"].encode(),
+            timeout=10,
+        )
+    except PublishError as exc:
+        raise RetryLater(str(exc)) from exc
     log.info("Publicado %s pedido=%s event_id=%s topic=%s", event["event_type"],
              event["order_id"], event["event_id"], topic)
 

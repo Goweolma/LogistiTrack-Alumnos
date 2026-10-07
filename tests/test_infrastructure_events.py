@@ -6,7 +6,7 @@ import pytest
 
 from common.events import build_event, validate_event
 
-from common.kafka_client import PublishError, create_consumer, publish
+from common.kafka_client import PublishError, create_consumer, publish, publish_confirmed
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -97,6 +97,22 @@ def test_validate_event_rejects_unknown_fields():
 
     with pytest.raises(ValueError):
         validate_event(event)
+
+
+def test_publish_confirmed_is_shared_and_keeps_the_message_key():
+    class KeyProducer(RecordingProducer):
+        def produce(self, topic, value, on_delivery, key=None):
+            self.key = key
+            super().produce(topic, value, on_delivery)
+
+    producer = KeyProducer()
+    event = build_event("ORDER_IN_TRANSIT", "PED-000001", "delivery", {"status": "IN_TRANSIT"})
+
+    publish_confirmed(producer, "deliveries", event, key=b"PED-000001", timeout=10)
+
+    assert producer.key == b"PED-000001"
+    assert producer.messages == [("deliveries", event)]
+    assert producer.flush_calls == [10]
 
 
 def test_publish_sends_valid_event_to_requested_topic():

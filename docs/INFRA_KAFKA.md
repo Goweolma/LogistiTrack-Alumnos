@@ -8,10 +8,11 @@
   `--if-not-exists` y los seis topics del contrato.
 - La red tiene el nombre explícito `logistitrack`. Antes Docker añadía el
   prefijo del proyecto al nombre real. Los puertos y DNS internos se conservan.
-- `common/kafka_client.py`: `publish()` y `publish_dead_letter()` esperan
-  confirmación del broker. Un timeout, rechazo o callback ausente produce
-  `PublishError` (subclase de `RuntimeError`). Antes se ignoraba el resultado
-  de `flush(5)` y el consumidor podía confirmar un offset sin entrega efectiva.
+- `common/kafka_client.py`: `publish_confirmed()` es el helper común.
+  `publish()` y `publish_dead_letter()` lo usan. Un timeout, rechazo o
+  callback ausente produce `PublishError` (subclase de `RuntimeError`).
+  Inventario y reparto delegan en ese helper. Antes cada servicio repetía
+  `produce` y podía ignorar el resultado de `flush`.
 - `tests/test_infrastructure_events.py`: cubre los tres fallos tanto en el
   topic solicitado como en dead-letter. Los dobles simulan callbacks de entrega;
   las dependencias Kafka reales siguen instaladas.

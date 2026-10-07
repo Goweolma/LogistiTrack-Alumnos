@@ -16,14 +16,23 @@ class PublishError(RuntimeError):
     """Kafka no confirmó la entrega; el consumidor no debe confirmar el offset."""
 
 
-def _publish_confirmed(producer: Producer, topic: str, event: dict) -> None:
+def publish_confirmed(
+    producer: Producer,
+    topic: str,
+    event: dict,
+    *,
+    key: bytes | None = None,
+    timeout: float = 5,
+) -> None:
+    """Publica y espera la confirmación del broker. Lo usan negocio y dead-letter."""
     results = []
-    producer.produce(
-        topic,
-        json.dumps(event).encode("utf-8"),
-        on_delivery=lambda error, message: results.append(error),
-    )
-    remaining = producer.flush(5)
+    payload = json.dumps(event).encode("utf-8")
+    callback = lambda error, message: results.append(error)
+    if key is None:
+        producer.produce(topic, payload, on_delivery=callback)
+    else:
+        producer.produce(topic, payload, key=key, on_delivery=callback)
+    remaining = producer.flush(timeout)
     if remaining or not results or results[0] is not None:
         raise PublishError(f"Kafka no confirmó la publicación en {topic}: {results or 'sin respuesta'}")
 
@@ -39,7 +48,7 @@ def publish(producer: Producer, topic: str, event: dict) -> None:
         publish_dead_letter(producer, event, str(exc))
         return
 
-    _publish_confirmed(producer, topic, event)
+    publish_confirmed(producer, topic, event)
 
 
 def publish_dead_letter(
@@ -61,7 +70,7 @@ def publish_dead_letter(
         {"error": reason, "original_event": original_event},
     )
     validate_event(dead_letter_event)
-    _publish_confirmed(producer, DEAD_LETTER_TOPIC, dead_letter_event)
+    publish_confirmed(producer, DEAD_LETTER_TOPIC, dead_letter_event)
 
 
 def create_consumer(group_id: str, topics: list[str]) -> Consumer:
