@@ -4,7 +4,7 @@ import pytest
 
 from common.events import build_event, validate_event
 
-from common.kafka_client import create_consumer, publish
+from common.kafka_client import PublishError, create_consumer, publish
 
 
 class RecordingProducer:
@@ -12,11 +12,14 @@ class RecordingProducer:
         self.messages = []
         self.flush_calls = []
 
-    def produce(self, topic, value):
+    def produce(self, topic, value, on_delivery):
         self.messages.append((topic, json.loads(value)))
+        self.on_delivery = on_delivery
 
     def flush(self, timeout):
         self.flush_calls.append(timeout)
+        self.on_delivery(None, None)
+        return 0
 
 
 def test_validate_event_accepts_contract_event():
@@ -102,3 +105,23 @@ def test_create_consumer_starts_from_earliest_without_auto_commit(monkeypatch):
     assert captured["config"]["auto.offset.reset"] == "earliest"
     assert captured["config"]["enable.auto.commit"] is False
     assert captured["topics"] == ["orders"]
+
+
+@pytest.mark.parametrize("invalid", [False, True])
+@pytest.mark.parametrize("failure", ["timeout", "broker", "no-callback"])
+def test_publish_does_not_report_success_without_broker_confirmation(invalid, failure):
+    class UnconfirmedProducer(RecordingProducer):
+        def flush(self, timeout):
+            if failure == "broker":
+                self.on_delivery("broker rejected message", None)
+            return 1 if failure == "timeout" else 0
+
+    producer = UnconfirmedProducer()
+    event = build_event("ORDER_CREATED", "PED-000001", "orders", {})
+    if invalid:
+        event["order_id"] = "invalid"
+
+    with pytest.raises(PublishError):
+        publish(producer, "orders", event)
+
+    assert [topic for topic, _ in producer.messages] == ["dead-letter" if invalid else "orders"]
