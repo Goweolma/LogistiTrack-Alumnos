@@ -517,3 +517,63 @@ def test_real_publish_failure_skips_offset_commit_and_retry_republishes_stored_r
     assert working_producer.messages == [("inventory", stored), ("order-status", stored)]
     assert db.stock[("PROD-001", "NORTE")] == 1
     assert db.history == [("PED-000001", "INVENTORY_RESERVED")]
+
+
+def test_second_order_created_with_new_event_id_does_not_reserve_again(db, published):
+    first = order_created(("PROD-001", 1))
+    second = order_created(("PROD-001", 1))
+    inventory.process_order_event(first, producer=object())
+
+    with pytest.raises(ValueError, match="INVALID_ORDER_STATE"):
+        inventory.process_order_event(second, producer=object())
+
+    assert db.stock[("PROD-001", "NORTE")] == 1
+    assert db.orders["PED-000001"] == "INVENTORY_RESERVED"
+    assert db.history == [("PED-000001", "INVENTORY_RESERVED")]
+    assert db.processed == {(first["event_id"], "inventory")}
+    assert len(published) == 2
+
+
+@pytest.mark.parametrize("status", ["INVENTORY_RESERVED", "INVENTORY_REJECTED", "PREPARING", "DELIVERED"])
+def test_order_not_in_received_is_not_reserved_nor_moved_back(db, published, status):
+    db.orders["PED-000001"] = status
+    before = dict(db.stock)
+
+    with pytest.raises(ValueError, match=f"INVALID_ORDER_STATE: se esperaba RECEIVED, pero está en {status}"):
+        inventory.process_order_event(order_created(("PROD-001", 1)), producer=object())
+
+    assert db.orders["PED-000001"] == status
+    assert db.stock == before
+    assert db.history == []
+    assert db.processed == set()
+    assert published == []
+
+
+def test_redelivered_event_is_still_a_duplicate_after_the_order_advances(db, published):
+    event = order_created(("PROD-001", 1))
+    inventory.process_order_event(event, producer=object())
+    db.orders["PED-000001"] = "DELIVERED"
+
+    assert inventory.process_order_event(event, producer=object()) == "duplicate"
+
+    assert db.orders["PED-000001"] == "DELIVERED"
+    assert db.history == [("PED-000001", "INVENTORY_RESERVED")]
+    assert published[2][1] == published[0][1]
+
+
+def test_consumer_sends_invalid_order_state_to_dead_letter_and_commits(monkeypatch, db, published):
+    db.orders["PED-000001"] = "DELIVERED"
+    dead_letters = []
+    monkeypatch.setattr(
+        inventory,
+        "publish_dead_letter",
+        lambda producer, event, reason, source: dead_letters.append(reason),
+    )
+    message = FakeMessage(json.dumps(order_created(("PROD-001", 1))).encode())
+    consumer = FakeConsumer([message])
+
+    run_consumer_once(monkeypatch, consumer)
+
+    assert len(dead_letters) == 1 and dead_letters[0].startswith("INVALID_ORDER_STATE")
+    assert consumer.committed == [message]
+    assert db.stock[("PROD-001", "NORTE")] == 2
