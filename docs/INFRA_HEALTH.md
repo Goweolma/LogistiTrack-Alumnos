@@ -3,7 +3,8 @@
 `python scripts/health_platform.py` verifica los ocho servicios, PostgreSQL,
 Kafka y Orders saludables, `kafka-init` terminado con código 0, el volumen real,
 el DNS interno de los servicios en ejecución, la red Compose compartida,
-cinco endpoints HTTP y los seis topics del contrato. Devuelve **0** si todo pasa y **1** ante cualquier fallo.
+el `init.sql` montado solo lectura, cinco endpoints HTTP y los seis topics
+del contrato. Devuelve **0** si todo pasa y **1** ante cualquier fallo.
 No crea pedidos ni modifica las APIs.
 
 ## Correcciones
@@ -17,6 +18,7 @@ No crea pedidos ni modifica las APIs.
 | `tests/test_infrastructure_health.py` | No había regresiones del script. | Prueba formatos Compose, volumen incorrecto, healthchecks, código de kafka-init, Docker ausente, timeout, HTTP, topics y código de salida. |
 | `scripts/health_platform.py` | El script no comprobaba que los servicios se encuentren por nombre. | Desde Postgres ejecuta `getent` contra los servicios que siguen en ejecución. `kafka-init` queda fuera porque al terminar desaparece del DNS. Un servicio detenido no se exige; si está en ejecución y no resuelve, falla la infraestructura. |
 | `scripts/health_platform.py` | No comprobaba que los ocho contenedores estuvieran en la misma red. | Compara el `NetworkID` de cada uno, incluido `kafka-init` ya terminado, y exige la etiqueta `com.docker.compose.network=logistitrack`. Acepta el prefijo de proyecto en el nombre visible de Docker. |
+| `scripts/health_platform.py` | Un volumen de datos correcto podía ocultar que el esquema inicial no estaba montado. | Exige un bind solo lectura en `/docker-entrypoint-initdb.d/01-init.sql`. No sustituye la comprobación del volumen `postgres_data` ni modifica el DDL. |
 
 ## Ejecutar
 

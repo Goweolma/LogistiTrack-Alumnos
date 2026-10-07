@@ -140,6 +140,51 @@ def test_http_failure_is_external_and_other_endpoints_are_checked(monkeypatch, c
     assert "BLOQUEADO POR DEPENDENCIA EXTERNA" in capsys.readouterr().out
 
 
+def init_mount(**changes):
+    mount = {
+        "Type": "bind",
+        "Destination": "/docker-entrypoint-initdb.d/01-init.sql",
+        "Mode": "ro",
+        "RW": False,
+    }
+    mount.update(changes)
+    return mount
+
+
+def mock_init_sql(monkeypatch, mounts, inspect_code=0):
+    def run(args):
+        if args[:3] == ["docker", "compose", "ps"]:
+            return result(json.dumps(healthy_records()))
+        if args[:2] == ["docker", "inspect"]:
+            if inspect_code:
+                return result("", inspect_code, "inspect failed")
+            return result(json.dumps(mounts))
+        raise AssertionError(args)
+
+    monkeypatch.setattr(health, "run_command", run)
+
+
+def test_init_sql_requires_a_read_only_bind_next_to_the_data_volume(monkeypatch):
+    mock_init_sql(monkeypatch, [healthy_mount(), init_mount()])
+    assert health.check_init_sql()
+
+
+@pytest.mark.parametrize("changes", [
+    {"RW": True},
+    {"Mode": "rw"},
+    {"Type": "volume"},
+    {"Destination": "/tmp/init.sql"},
+])
+def test_init_sql_rejects_a_writable_or_misplaced_mount(monkeypatch, changes):
+    mock_init_sql(monkeypatch, [healthy_mount(), init_mount(**changes)])
+    assert not health.check_init_sql()
+
+
+def test_init_sql_reports_inspect_errors(monkeypatch):
+    mock_init_sql(monkeypatch, [], inspect_code=1)
+    assert not health.check_init_sql()
+
+
 def test_internal_dns_resolves_running_services(monkeypatch):
     def run(args):
         if args[:3] == ["docker", "compose", "ps"]:
@@ -246,16 +291,21 @@ def test_internal_dns_reports_probe_failures(monkeypatch):
 
 @pytest.mark.parametrize(
     "failed",
-    [None, "check_containers", "check_internal_dns", "check_shared_network", "check_http_endpoints", "check_topics"],
+    [
+        None, "check_containers", "check_internal_dns", "check_shared_network",
+        "check_init_sql", "check_http_endpoints", "check_topics",
+    ],
 )
 def test_exit_code_and_all_checks_run(monkeypatch, failed):
     called = []
-    for name in ("check_containers", "check_internal_dns", "check_shared_network", "check_http_endpoints", "check_topics"):
+    checks = (
+        "check_containers", "check_internal_dns", "check_shared_network",
+        "check_init_sql", "check_http_endpoints", "check_topics",
+    )
+    for name in checks:
         def check(name=name):
             called.append(name)
             return name != failed
         monkeypatch.setattr(health, name, check)
     assert health.main() == (0 if failed is None else 1)
-    assert called == [
-        "check_containers", "check_internal_dns", "check_shared_network", "check_http_endpoints", "check_topics",
-    ]
+    assert called == list(checks)

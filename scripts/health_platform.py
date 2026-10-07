@@ -1,7 +1,7 @@
 """Valida la salud completa de la plataforma LogistiTrack.
 
 Comprueba el estado de los contenedores, sus healthchecks, el DNS interno,
-la red compartida, los endpoints HTTP y los seis topics de Kafka.
+la red compartida, el esquema inicial, los endpoints HTTP y los seis topics.
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ HEALTHY_SERVICES = {"postgres", "kafka", "orders"}
 INFRASTRUCTURE_SERVICES = {"postgres", "kafka", "kafka-init"}
 # kafka-init termina y desaparece del DNS. Solo se resuelven servicios vivos.
 COMPOSE_NETWORK = "logistitrack"
+INIT_SQL_DESTINATION = "/docker-entrypoint-initdb.d/01-init.sql"
 DNS_NAMES = (
     "postgres",
     "kafka",
@@ -275,6 +276,39 @@ def check_internal_dns() -> bool:
     return report(False, "INFRAESTRUCTURA: DNS interno sin resolver: " + ", ".join(missing))
 
 
+def check_init_sql() -> bool:
+    """El DDL compartido debe estar montado solo lectura y no sustituye al volumen."""
+    result = run_command(["docker", "compose", "ps", "--all", "--format", "json"])
+    if result.returncode != 0:
+        return report(False, f"INFRAESTRUCTURA: init.sql: {result.stderr.strip()}")
+    try:
+        records = parse_compose_records(result.stdout)
+    except ValueError as exc:
+        return report(False, f"INFRAESTRUCTURA: init.sql: {exc}")
+
+    postgres = next((record for record in records if record.get("Service") == "postgres"), None)
+    container_id = postgres.get("ID") if isinstance(postgres, dict) else None
+    if not container_id:
+        return report(False, "INFRAESTRUCTURA: postgres sin ID para inspeccionar init.sql")
+    inspected = run_command(["docker", "inspect", "--format", "{{json .Mounts}}", container_id])
+    if inspected.returncode != 0:
+        return report(False, f"INFRAESTRUCTURA: init.sql: {inspected.stderr.strip()}")
+    try:
+        mounts = json.loads(inspected.stdout)
+        if not isinstance(mounts, list) or not all(isinstance(mount, dict) for mount in mounts):
+            raise ValueError("Mounts debe ser una lista de montajes")
+    except ValueError as exc:
+        return report(False, f"INFRAESTRUCTURA: init.sql: {exc}")
+
+    for mount in mounts:
+        if (mount.get("Type") == "bind"
+                and mount.get("Destination") == INIT_SQL_DESTINATION
+                and mount.get("RW") is False
+                and mount.get("Mode") == "ro"):
+            return report(True, "postgres: init.sql montado solo lectura")
+    return report(False, "INFRAESTRUCTURA: falta init.sql de solo lectura en " + INIT_SQL_DESTINATION)
+
+
 def check_http_endpoints() -> bool:
     all_ok = True
     for service, url in HTTP_HEALTHCHECKS.items():
@@ -317,11 +351,12 @@ def main() -> int:
         check_containers(),
         check_internal_dns(),
         check_shared_network(),
+        check_init_sql(),
         check_http_endpoints(),
         check_topics(),
     )
     if all(checks):
-        print("Plataforma saludable: contenedores, DNS, red, endpoints y topics verificados.")
+        print("Plataforma saludable: contenedores, DNS, red, init.sql, endpoints y topics verificados.")
         return 0
     print("La plataforma requiere atención. Resolver infraestructura primero; los fallos de servicios del equipo requieren revisar sus dependencias y logs.")
     return 1
