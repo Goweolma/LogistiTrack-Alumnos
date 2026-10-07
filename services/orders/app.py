@@ -6,7 +6,9 @@ import os
 from flask import Flask, jsonify, request
 from common.database import get_connection
 
+
 app = Flask(__name__)
+
 
 
 @app.get("/health")
@@ -141,11 +143,66 @@ def get_order(order_id: str):
     )
 
 
+def validate_order_payload(payload):
+    if not isinstance(payload, dict):
+        return "INVALID_JSON"
+
+    delivery_address = payload.get("delivery_address")
+    items = payload.get("items")
+
+    if (
+        not isinstance(delivery_address, str)
+        or not delivery_address.strip()
+        or len(delivery_address.strip()) > 200
+    ):
+        return "INVALID_DELIVERY_ADDRESS"
+
+    if not isinstance(items, list) or not items:
+        return "INVALID_ITEMS"
+
+    product_ids = set()
+
+    for item in items:
+        if not isinstance(item, dict):
+            return "INVALID_ITEM"
+
+        product_id = item.get("product_id")
+        quantity = item.get("quantity")
+
+        if not isinstance(product_id, str) or not product_id.strip():
+            return "INVALID_PRODUCT_ID"
+
+        if (
+            isinstance(quantity, bool)
+            or not isinstance(quantity, int)
+            or quantity <= 0
+        ):
+            return "INVALID_QUANTITY"
+
+        normalized_product_id = product_id.strip()
+        if normalized_product_id in product_ids:
+            return "DUPLICATE_PRODUCT"
+
+        product_ids.add(normalized_product_id)
+
+    return None
+
+
 @app.post("/api/orders")
 def create_order():
-    payload = request.get_json(silent=True) or {}
-    # TODO(ALUMNO-1): validar, persistir y publicar ORDER_CREATED.
-    return jsonify({"error": "NOT_IMPLEMENTED", "received": payload}), 501
+    payload = request.get_json(silent=True)
+    validation_error = validate_order_payload(payload)
+
+    if validation_error:
+        return jsonify(
+            {
+                "error": "INVALID_ORDER",
+                "detail": validation_error,
+            }
+        ), 400
+
+    # Siguiente paso: guardar el pedido y publicar ORDER_CREATED.
+    return jsonify({"error": "NOT_IMPLEMENTED"}), 501
 
 
 if __name__ == "__main__":
