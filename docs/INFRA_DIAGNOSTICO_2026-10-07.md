@@ -100,3 +100,39 @@ Para la exposición mostrar `docker compose ps -a`, salida del script, listado
 de topics y pruebas. Explicar que HTTP saludable no sustituye una prueba completa
 de pedidos. La publicación confirmada permite reintentos; no elimina por sí sola
 duplicados ni garantiza entrega exactamente una vez.
+
+## Continuación del mismo día
+
+Los dos Pull Requests siguen abiertos. Cada avance quedó en su propio commit,
+sin reescribir historia y sin tocar `services/` ni `frontend/`.
+
+En el PR de Kafka, después de exigir `DATABASE_URL` y `POSTGRES_PASSWORD` por
+entorno:
+
+- `validate_event` rechaza los UUID que el esquema no acepta (sin guiones,
+  con llaves o `urn:uuid:`). Esos eventos van solo a `dead-letter`. El archivo
+  de contrato no cambió.
+- `version: 1.0` sigue pasando el `const: 1` del esquema y Python lo rechaza.
+  Esa diferencia queda documentada y cubierta por una prueba. No se afirma
+  equivalencia entre los dos validadores.
+- Inventory, warehouse, delivery y frontend tienen healthcheck en Compose.
+  Tras recrear solo esos contenedores, los cuatro quedaron `healthy` y sus
+  endpoints respondieron HTTP 200. Postgres, Kafka, Orders y el volumen no se
+  recrearon para borrar datos. `kafka-init` volvió a terminar en 0.
+
+En el PR de salud, el script además comprueba:
+
+- DNS interno de los servicios que siguen en ejecución, medido con `getent`
+  desde Postgres. `kafka-init` no se exige porque al salir deja de resolver.
+- Los ocho contenedores comparten la red etiquetada `logistitrack`, aunque el
+  nombre visible de Docker lleve el prefijo del proyecto.
+- `init.sql` está montado solo lectura en `docker-entrypoint-initdb.d`.
+
+Ejecución real del script después de esos tres commits: todas las líneas en
+`[OK]` y código de salida 0. La suite de esta rama quedó en 135 pruebas
+aprobadas. La suite de la rama Kafka quedó en 106. Combinadas en una rama
+local, sin publicarla, quedaron 154 aprobadas. No se ejecutó
+`docker compose down -v`.
+
+Siguen bloqueados por otros alumnos el alta real de pedidos y las columnas que
+Delivery espera y el DDL compartido no tiene.
