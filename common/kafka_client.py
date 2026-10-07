@@ -16,14 +16,59 @@ class PublishError(RuntimeError):
     """Kafka no confirmó la entrega; el consumidor no debe confirmar el offset."""
 
 
-def _publish_confirmed(producer: Producer, topic: str, event: dict) -> None:
+# Inventario y reparto todavía confirman con su propio produce/flush.
+# Esos archivos son de otros alumnos: no se modifican en este cambio.
+# Pueden delegar en este helper y conservar su excepción y sus pruebas.
+#
+# Inventario, services/inventory/app.py. Ya importa publish_dead_letter.
+# Añadir PublishError as BrokerPublishError y publish_confirmed as confirm_publish.
+# Sustituir solo el cuerpo de su publish_confirmed, con timeout=10:
+#
+#     def publish_confirmed(producer, topic: str, event: dict[str, Any]) -> None:
+#         validate_event(event)
+#         try:
+#             confirm_publish(producer, topic, event, timeout=10)
+#         except BrokerPublishError as exc:
+#             raise PublishError(str(exc)) from exc
+#
+# Reparto, services/delivery/app.py. Importar PublishError y
+# publish_confirmed as confirm_publish. Conservar la clave, RetryLater y el log:
+#
+#     def publish_confirmed(producer, topic, event):
+#         try:
+#             confirm_publish(
+#                 producer,
+#                 topic,
+#                 event,
+#                 key=event["order_id"].encode(),
+#                 timeout=10,
+#             )
+#         except PublishError as exc:
+#             raise RetryLater(str(exc)) from exc
+#         log.info(
+#             "Publicado %s pedido=%s event_id=%s topic=%s",
+#             event["event_type"],
+#             event["order_id"],
+#             event["event_id"],
+#             topic,
+#         )
+def publish_confirmed(
+    producer: Producer,
+    topic: str,
+    event: dict,
+    *,
+    key: bytes | None = None,
+    timeout: float = 5,
+) -> None:
+    """Publica y espera la confirmación del broker. Lo usan publish() y dead-letter."""
     results = []
-    producer.produce(
-        topic,
-        json.dumps(event).encode("utf-8"),
-        on_delivery=lambda error, message: results.append(error),
-    )
-    remaining = producer.flush(5)
+    payload = json.dumps(event).encode("utf-8")
+    callback = lambda error, message: results.append(error)
+    if key is None:
+        producer.produce(topic, payload, on_delivery=callback)
+    else:
+        producer.produce(topic, payload, key=key, on_delivery=callback)
+    remaining = producer.flush(timeout)
     if remaining or not results or results[0] is not None:
         raise PublishError(f"Kafka no confirmó la publicación en {topic}: {results or 'sin respuesta'}")
 
@@ -39,7 +84,7 @@ def publish(producer: Producer, topic: str, event: dict) -> None:
         publish_dead_letter(producer, event, str(exc))
         return
 
-    _publish_confirmed(producer, topic, event)
+    publish_confirmed(producer, topic, event)
 
 
 def publish_dead_letter(
@@ -61,7 +106,7 @@ def publish_dead_letter(
         {"error": reason, "original_event": original_event},
     )
     validate_event(dead_letter_event)
-    _publish_confirmed(producer, DEAD_LETTER_TOPIC, dead_letter_event)
+    publish_confirmed(producer, DEAD_LETTER_TOPIC, dead_letter_event)
 
 
 def create_consumer(group_id: str, topics: list[str]) -> Consumer:
