@@ -10,7 +10,7 @@ from typing import Any
 from flask import Flask, jsonify
 from common.database import get_connection
 from common.events import build_event, validate_event
-from common.kafka_client import create_consumer, create_producer, publish, publish_dead_letter
+from common.kafka_client import create_consumer, create_producer, publish_dead_letter
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s inventory %(message)s")
@@ -133,6 +133,14 @@ def reserve_inventory(event: dict[str, Any], quantities: dict[str, int]) -> tupl
                 row = cursor.fetchone()
                 return "duplicate", row[0] if row else None
 
+            # Orders guarda el pedido antes de publicar ORDER_CREATED; si no existe, todo se revierte.
+            cursor.execute(
+                "SELECT status FROM orders WHERE order_id = %s FOR UPDATE",
+                (event["order_id"],),
+            )
+            if cursor.fetchone() is None:
+                raise ValueError(f"ORDER_NOT_FOUND: {event['order_id']} no existe en orders")
+
             # FOR UPDATE evita que dos pedidos reserven la misma existencia al mismo tiempo.
             cursor.execute(
                 """
@@ -164,6 +172,15 @@ def reserve_inventory(event: dict[str, Any], quantities: dict[str, int]) -> tupl
                         (quantity, pid, warehouse),
                     )
 
+            cursor.execute(
+                "UPDATE orders SET status = %s WHERE order_id = %s",
+                (event_type, event["order_id"]),
+            )
+            cursor.execute(
+                "INSERT INTO order_history (order_id, status) VALUES (%s, %s)",
+                (event["order_id"], event_type),
+            )
+
             result_event = build_event(event_type, event["order_id"], SERVICE_NAME, payload)
             cursor.execute(
                 """
@@ -173,6 +190,24 @@ def reserve_inventory(event: dict[str, Any], quantities: dict[str, int]) -> tupl
                 (event["event_id"], event["order_id"], event_type, warehouse, json.dumps(result_event)),
             )
     return ("reserved" if warehouse else "rejected"), result_event
+
+
+class PublishError(RuntimeError):
+    """Kafka no confirmó la entrega; el offset de ORDER_CREATED no debe confirmarse."""
+
+
+def publish_confirmed(producer, topic: str, event: dict[str, Any]) -> None:
+    """Publica y espera la confirmación del broker; el helper común no revisa el resultado de flush."""
+    validate_event(event)
+    results = []
+    producer.produce(
+        topic,
+        json.dumps(event).encode("utf-8"),
+        on_delivery=lambda error, message: results.append(error),
+    )
+    remaining = producer.flush(10)
+    if remaining or not results or results[0] is not None:
+        raise PublishError(f"Kafka no confirmó {event['event_type']} en {topic}: {results or 'sin respuesta'}")
 
 
 def process_order_event(event: dict[str, Any], producer) -> str:
@@ -186,9 +221,10 @@ def process_order_event(event: dict[str, Any], producer) -> str:
     result, outgoing = reserve_inventory(event, quantities)
 
     # Un duplicado reenvía el mismo evento (mismo event_id) por si la publicación anterior se perdió.
+    # Si Kafka no confirma, PublishError evita el commit del offset y el reintento llega como duplicado.
     if outgoing is not None:
-        publish(producer, INVENTORY_TOPIC, outgoing)
-        publish(producer, STATUS_TOPIC, outgoing)
+        publish_confirmed(producer, INVENTORY_TOPIC, outgoing)
+        publish_confirmed(producer, STATUS_TOPIC, outgoing)
 
     logging.info(
         "Resultado=%s order_id=%s event_id=%s publicado=%s",
