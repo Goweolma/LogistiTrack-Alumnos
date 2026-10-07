@@ -19,6 +19,19 @@
 No se cambian contratos, topics, grupos ni configuración de consumidores:
 `earliest` y `enable.auto.commit=False`. No se editan servicios ni frontend.
 
+## Validador
+
+`validate_event` exige `event_id` con el formato `8-4-4-4-12` de
+`contracts/event.schema.json` (`format: uuid`). Antes, `UUID()` aceptaba
+valores sin guiones, con llaves o `urn:uuid:`, y `publish` los enviaba al
+topic de negocio. Esas formas quedan solo en `dead-letter`. Las mayúsculas
+siguen siendo válidas, igual que en el esquema. No se modifica `contracts/`:
+un cambio de contrato pide otro Pull Request y la aprobación del profesor.
+
+`version` sigue siendo el entero `1`. El `const: 1` del esquema también acepta
+`1.0` por comparación numérica; Python lo rechaza antes de publicar. No se
+afirma que el validador y el esquema sean equivalentes.
+
 ## Prueba reproducible (PowerShell o terminal Linux)
 
 Antes del primer arranque, copiar `.env.example` a `.env` (`Copy-Item` en
