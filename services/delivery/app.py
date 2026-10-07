@@ -1,12 +1,14 @@
 """Servicio de reparto. Responsable: Alumno 4.
 
-REQUISITO DE INTEGRACION pendiente de acordar con alumnos 1 y 2 (no se crea DDL):
-orders necesita driver_id y vehicle_id opcionales.
-order_history necesita event_id UUID UNIQUE y event JSONB opcionales para reintentos.
+Compatible con orders y order_history de infrastructure/postgres/init.sql.
+Delivery crea delivery_assignments y delivery_events para sus datos propios.
+No agrega columnas a las tablas compartidas.
 processed_events usa la clave (event_id, service_name), como init.sql.
 ORDER_READY solo necesita el sobre común.
 
 Probar: python -m pytest -q tests/test_delivery.py
+Para validar SQL real: configurar DELIVERY_TEST_DATABASE_URL y ejecutar las pruebas.
+La prueba PostgreSQL usa un esquema temporal y revierte todos sus cambios.
 Integración: docker compose up -d --build delivery; docker compose logs -f delivery
 Enviar ORDER_READY a warehouse para un pedido READY_FOR_DELIVERY y observar
 order-status, deliveries, orders y order_history. Reenviar el evento: deben
@@ -93,6 +95,26 @@ class DeliveryStore:
     def __init__(self, connection):
         self.connection = connection
 
+    def initialize(self):
+        """Crea exclusivamente tablas propiedad de Delivery."""
+        with self.connection.transaction():
+            self.connection.execute("""
+                CREATE TABLE IF NOT EXISTS delivery_assignments (
+                    order_id VARCHAR(40) PRIMARY KEY REFERENCES orders(order_id),
+                    driver_id VARCHAR(40) NOT NULL,
+                    vehicle_id VARCHAR(40) NOT NULL
+                )
+            """)
+            self.connection.execute("""
+                CREATE TABLE IF NOT EXISTS delivery_events (
+                    event_id UUID PRIMARY KEY,
+                    order_id VARCHAR(40) NOT NULL REFERENCES orders(order_id),
+                    status VARCHAR(30) NOT NULL,
+                    event JSONB NOT NULL,
+                    UNIQUE (order_id, status)
+                )
+            """)
+
     def processed(self, event_id):
         with self.connection.transaction():
             return self.connection.execute(
@@ -102,8 +124,8 @@ class DeliveryStore:
     def history(self, order_id):
         with self.connection.transaction():
             rows = self.connection.execute(
-                "SELECT status, event FROM order_history WHERE order_id=%s "
-                "AND event->>'source'=%s", (order_id, "delivery")).fetchall()
+                "SELECT status, event FROM delivery_events WHERE order_id=%s",
+                (order_id,)).fetchall()
         events = {status: event for status, event in rows}
         return [events[status] for status in STAGES if status in events]
 
@@ -112,7 +134,9 @@ class DeliveryStore:
             # Serializa reserva/liberación entre todas las réplicas.
             self.connection.execute("SELECT pg_advisory_xact_lock(42004, 1)")
             row = self.connection.execute(
-                "SELECT status, driver_id, vehicle_id FROM orders WHERE order_id=%s FOR UPDATE",
+                "SELECT o.status, a.driver_id, a.vehicle_id FROM orders o "
+                "LEFT JOIN delivery_assignments a ON a.order_id=o.order_id "
+                "WHERE o.order_id=%s FOR UPDATE OF o",
                 (order_id,)).fetchone()
             if row is None:
                 raise RetryLater("Pedido todavía no disponible")
@@ -121,13 +145,17 @@ class DeliveryStore:
                 return None
             if status == "READY_FOR_DELIVERY":
                 busy = self.connection.execute(
-                    "SELECT driver_id, vehicle_id FROM orders WHERE status IN (%s,%s,%s)",
+                    "SELECT a.driver_id, a.vehicle_id FROM delivery_assignments a "
+                    "JOIN orders o ON o.order_id=a.order_id WHERE o.status IN (%s,%s,%s)",
                     STAGES[:3]).fetchall()
                 unit = next(((d, v) for d, v in FLEET
                              if all(d != bd and v != bv for bd, bv in busy)), None)
                 if unit is None:
                     raise RetryLater("Todas las unidades están ocupadas")
                 driver, vehicle = unit
+                self.connection.execute(
+                    "INSERT INTO delivery_assignments (order_id,driver_id,vehicle_id) VALUES (%s,%s,%s)",
+                    (order_id, driver, vehicle))
                 index = 0
             elif status in STAGES[:3]:
                 if (driver, vehicle) not in FLEET:
@@ -140,10 +168,13 @@ class DeliveryStore:
                                 {"status": status, "driver_id": driver, "vehicle_id": vehicle})
             event["event_id"] = str(uuid5(NAMESPACE_URL, f"logistitrack/delivery/{order_id}/{status}"))
             self.connection.execute(
-                "UPDATE orders SET status=%s, driver_id=%s, vehicle_id=%s WHERE order_id=%s",
-                (status, driver, vehicle, order_id))
+                "UPDATE orders SET status=%s WHERE order_id=%s",
+                (status, order_id))
             self.connection.execute(
-                "INSERT INTO order_history (order_id,status,event_id,event) VALUES (%s,%s,%s,%s::jsonb)",
+                "INSERT INTO order_history (order_id,status) VALUES (%s,%s)",
+                (order_id, status))
+            self.connection.execute(
+                "INSERT INTO delivery_events (order_id,status,event_id,event) VALUES (%s,%s,%s,%s::jsonb)",
                 (order_id, status, event["event_id"], json.dumps(event)))
             return event
 
@@ -201,6 +232,8 @@ def consume_ready_orders():
     while True:
         consumer = None
         try:
+            with get_connection() as connection:
+                DeliveryStore(connection).initialize()
             producer = create_producer()
             consumer = create_consumer("delivery-service", ["warehouse"])
             while True:
@@ -217,6 +250,8 @@ def consume_ready_orders():
             if consumer is not None:
                 consumer.close()
         time.sleep(3)
+
+
 if __name__ == "__main__":
     threading.Thread(target=consume_ready_orders, daemon=True).start()
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5004")))
