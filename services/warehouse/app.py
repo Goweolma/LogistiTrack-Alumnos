@@ -37,10 +37,10 @@ def initialize_storage() -> None:
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS processed_events (
-                    event_id VARCHAR(64) NOT NULL,
-                    consumer VARCHAR(40) NOT NULL,
+                    event_id UUID NOT NULL,
+                    service_name VARCHAR(40) NOT NULL,
                     processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    PRIMARY KEY (event_id, consumer)
+                    PRIMARY KEY (event_id, service_name)
                 )
                 """
             )
@@ -62,7 +62,7 @@ def event_was_processed(event_id: str) -> bool:
                 """
                 SELECT 1
                 FROM processed_events
-                WHERE event_id = %s AND consumer = %s
+                WHERE event_id = %s AND service_name = %s
                 """,
                 (event_id, SERVICE_NAME),
             )
@@ -75,21 +75,68 @@ def mark_event_processed(event_id: str) -> None:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                INSERT INTO processed_events (event_id, consumer)
+                INSERT INTO processed_events (event_id, service_name)
                 VALUES (%s, %s)
-                ON CONFLICT (event_id, consumer) DO NOTHING
+                ON CONFLICT (event_id, service_name) DO NOTHING
                 """,
                 (event_id, SERVICE_NAME),
             )
-            
+
+def save_order_status(order_id: str, expected: str, new_status: str) -> str:
+    with get_connection() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT status FROM orders WHERE order_id = %s FOR UPDATE",
+                (order_id,),
+            )
+            row = cursor.fetchone()
+
+            if row is None:
+                raise RuntimeError(f"No existe el pedido {order_id}")
+
+            current_status = row[0]
+            if current_status == new_status:
+                return "already"
+
+            later_statuses = {
+                "READY_FOR_DELIVERY",
+                "DRIVER_ASSIGNED",
+                "IN_TRANSIT",
+                "NEAR_DESTINATION",
+                "DELIVERED",
+            }
+
+            if new_status == "PREPARING" and current_status in later_statuses:
+                return "advanced"
+
+            if new_status == "READY_FOR_DELIVERY" and current_status in (
+                later_statuses - {"READY_FOR_DELIVERY"}
+            ):
+                return "advanced"
+
+            if current_status != expected:
+                raise RuntimeError(
+                    f"Pedido {order_id}: se esperaba {expected}, "
+                    f"pero está en {current_status}"
+                )
+
+            cursor.execute(
+                "UPDATE orders SET status = %s WHERE order_id = %s",
+                (new_status, order_id),
+            )
+            cursor.execute(
+                "INSERT INTO order_history (order_id, status) VALUES (%s, %s)",
+                (order_id, new_status),
+            )
+            return "updated"
 def calculate_preparation_seconds(payload: dict[str, Any]) -> float:
     """Calcula el tiempo de preparación según cantidad y tipo de producto."""
     try:
         base_seconds = max(
             0.0,
             float(os.getenv("PREPARATION_DELAY_SECONDS", "3")),
-        )   
-        
+        )
+
     except ValueError:
         base_seconds = 3.0
 
@@ -169,24 +216,28 @@ def process_inventory_event(event: dict[str, Any], producer) -> str:
         }
     )
 
-    preparing_event = build_event(
-        "PREPARING",
-        order_id,
-        SERVICE_NAME,
-        preparing_payload,
+    preparing_result = save_order_status(
+        order_id, "INVENTORY_RESERVED", "PREPARING"
     )
 
-    publish(producer, STATUS_TOPIC, preparing_event)
+    if preparing_result != "advanced":
+        preparing_event = build_event(
+            "PREPARING",
+            order_id,
+            SERVICE_NAME,
+            preparing_payload,
+        )
+        publish(producer, STATUS_TOPIC, preparing_event)
 
-    logging.info(
-        "Preparando pedido order_id=%s tiempo=%.2f segundos",
-        order_id,
-        preparation_seconds,
+        logging.info(
+            "Preparando pedido order_id=%s tiempo=%.2f segundos",
+            order_id,
+            preparation_seconds,
+        )
+        time.sleep(preparation_seconds)
+    ready_result = save_order_status(
+        order_id, "PREPARING", "READY_FOR_DELIVERY"
     )
-
-    # Simula el trabajo físico dentro del almacén.
-    time.sleep(preparation_seconds)
-
     # Segundo cambio de estado.
     ready_payload = dict(payload)
     ready_payload.update(
@@ -197,28 +248,26 @@ def process_inventory_event(event: dict[str, Any], producer) -> str:
         }
     )
 
-    ready_status_event = build_event(
-        "READY_FOR_DELIVERY",
-        order_id,
-        SERVICE_NAME,
-        ready_payload,
-    )
+    if ready_result != "advanced":
+        ready_status_event = build_event(
+            "READY_FOR_DELIVERY",
+            order_id,
+            SERVICE_NAME,
+            ready_payload,
+        )
+        publish(producer, STATUS_TOPIC, ready_status_event)
 
-    publish(producer, STATUS_TOPIC, ready_status_event)
-
-    # Este es el evento que posteriormente consumirá Delivery.
-    order_ready_event = build_event(
-        "ORDER_READY",
-        order_id,
-        SERVICE_NAME,
-        ready_payload,
-    )
-
-    publish(producer, WAREHOUSE_TOPIC, order_ready_event)
+        order_ready_event = build_event(
+            "ORDER_READY",
+            order_id,
+            SERVICE_NAME,
+            ready_payload,
+        )
+        publish(producer, WAREHOUSE_TOPIC, order_ready_event)
 
     # Se registra hasta que todas las publicaciones terminaron.
     mark_event_processed(event["event_id"])
-    
+
     logging.info(
         "Pedido listo order_id=%s event_id=%s",
         order_id,

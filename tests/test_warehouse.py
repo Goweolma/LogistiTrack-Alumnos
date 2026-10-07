@@ -56,6 +56,7 @@ def test_publishes_preparing_ready_and_order_ready(monkeypatch):
     event = create_reserved_event()
     published = []
     marked = []
+    saved_statuses = []
 
     monkeypatch.setenv("PREPARATION_DELAY_SECONDS", "0")
 
@@ -77,6 +78,14 @@ def test_publishes_preparing_ready_and_order_ready(monkeypatch):
         warehouse,
         "mark_event_processed",
         lambda event_id: marked.append(event_id),
+    )
+
+    monkeypatch.setattr(
+        warehouse,
+        "save_order_status",
+        lambda order_id, expected, new_status: saved_statuses.append(
+            (order_id, expected, new_status)
+        ),
     )
 
     result = warehouse.process_inventory_event(
@@ -103,6 +112,11 @@ def test_publishes_preparing_ready_and_order_ready(monkeypatch):
 
     assert marked == [
         event["event_id"]
+    ]
+
+    assert saved_statuses == [
+        ("PED-000003", "INVENTORY_RESERVED", "PREPARING"),
+        ("PED-000003", "PREPARING", "READY_FOR_DELIVERY"),
     ]
 
 
