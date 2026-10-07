@@ -2,6 +2,7 @@
 
 import logging
 import os
+from secrets import randbelow
 
 from flask import Flask, jsonify, request
 from common.database import get_connection
@@ -9,6 +10,9 @@ from common.database import get_connection
 
 app = Flask(__name__)
 
+
+def generate_order_id():
+    return f"PED-{randbelow(1_000_000):06d}"
 
 
 @app.get("/health")
@@ -201,8 +205,85 @@ def create_order():
             }
         ), 400
 
-    # Siguiente paso: guardar el pedido y publicar ORDER_CREATED.
-    return jsonify({"error": "NOT_IMPLEMENTED"}), 501
+    delivery_address = payload["delivery_address"].strip()
+    items = [
+        {
+            "product_id": item["product_id"].strip(),
+            "quantity": item["quantity"],
+        }
+        for item in payload["items"]
+    ]
+
+    order_id = generate_order_id()
+
+    try:
+        with get_connection() as connection:
+            with connection.cursor() as cursor:
+                total = 0
+
+                for item in items:
+                    cursor.execute(
+                        "SELECT price FROM products WHERE product_id = %s",
+                        (item["product_id"],),
+                    )
+                    product = cursor.fetchone()
+
+                    if product is None:
+                        return jsonify(
+                            {
+                                "error": "INVALID_ORDER",
+                                "detail": "PRODUCT_NOT_FOUND",
+                                "product_id": item["product_id"],
+                            }
+                        ), 400
+
+                    total += product[0] * item["quantity"]
+
+                cursor.execute(
+                    """
+                    INSERT INTO orders (
+                        order_id, total, delivery_address, status
+                    )
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (order_id, total, delivery_address, "RECEIVED"),
+                )
+
+                for item in items:
+                    cursor.execute(
+                        """
+                        INSERT INTO order_items (
+                            order_id, product_id, quantity
+                        )
+                        VALUES (%s, %s, %s)
+                        """,
+                        (
+                            order_id,
+                            item["product_id"],
+                            item["quantity"],
+                        ),
+                    )
+
+                cursor.execute(
+                    """
+                    INSERT INTO order_history (order_id, status)
+                    VALUES (%s, %s)
+                    """,
+                    (order_id, "RECEIVED"),
+                )
+
+    except Exception:
+        logging.exception("Error al crear el pedido")
+        return jsonify({"error": "DATABASE_UNAVAILABLE"}), 503
+
+    return jsonify(
+        {
+            "order_id": order_id,
+            "status": "RECEIVED",
+            "total": float(total),
+            "items": items,
+        }
+    ), 201
 
 
 if __name__ == "__main__":
