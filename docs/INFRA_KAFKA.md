@@ -21,6 +21,13 @@ No se cambian contratos, topics, grupos ni configuración de consumidores:
 
 ## Prueba reproducible (PowerShell o terminal Linux)
 
+Antes del primer arranque, copiar `.env.example` a `.env` (`Copy-Item` en
+PowerShell o `cp` en Linux). No sobrescribir una configuración local existente.
+`POSTGRES_PASSWORD` y `DATABASE_URL` son obligatorios: Compose rechaza valores
+ausentes o vacíos en vez de usar una contraseña incluida en el YAML. Mantener
+ambos sincronizados; `.env.example` conserva solo valores de demostración.
+Las variantes locales `.env.*` también se ignoran, salvo `.env.example`.
+
 ```text
 python -m pip install -r requirements-dev.txt
 python -m pytest -q

@@ -1,7 +1,7 @@
 name: logistitrack-alumnos
 
 x-app-environment: &app-environment
-  DATABASE_URL: ${DATABASE_URL:-postgresql://logisti:logisti123@postgres:5432/logistitrack}
+  DATABASE_URL: ${DATABASE_URL:?Configura DATABASE_URL en .env usando .env.example}
   KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9092}
   PYTHONUNBUFFERED: "1"
 
@@ -11,7 +11,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-logistitrack}
       POSTGRES_USER: ${POSTGRES_USER:-logisti}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-logisti123}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Configura POSTGRES_PASSWORD en .env usando .env.example}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
