@@ -20,6 +20,17 @@ CREATE TABLE IF NOT EXISTS processed_events (
     PRIMARY KEY (event_id, service_name)
 );
 
+-- ALUMNO-2: historial de reservas. Guarda el evento publicado para reenviarlo
+-- si Kafka entrega otra vez el mismo ORDER_CREATED.
+CREATE TABLE IF NOT EXISTS inventory_reservations (
+    event_id UUID NOT NULL PRIMARY KEY,
+    order_id VARCHAR(40) NOT NULL,
+    status VARCHAR(30) NOT NULL CHECK (status IN ('INVENTORY_RESERVED', 'INVENTORY_REJECTED')),
+    warehouse VARCHAR(30) CHECK (warehouse IN ('NORTE', 'SUR')),
+    result_event JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- ALUMNO-1: tablas de pedidos.
 CREATE TABLE IF NOT EXISTS orders (
     order_id VARCHAR(40) PRIMARY KEY,
