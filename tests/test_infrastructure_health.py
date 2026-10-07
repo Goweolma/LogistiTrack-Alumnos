@@ -140,13 +140,72 @@ def test_http_failure_is_external_and_other_endpoints_are_checked(monkeypatch, c
     assert "BLOQUEADO POR DEPENDENCIA EXTERNA" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("failed", [None, "check_containers", "check_http_endpoints", "check_topics"])
+def test_internal_dns_resolves_running_services(monkeypatch):
+    def run(args):
+        if args[:3] == ["docker", "compose", "ps"]:
+            return result(json.dumps(healthy_records()))
+        assert args[:5] == ["docker", "compose", "exec", "-T", "postgres"]
+        assert "kafka-init" not in args[-1]
+        return result("\n".join(f"OK {name}" for name in health.DNS_NAMES))
+
+    monkeypatch.setattr(health, "run_command", run)
+    assert health.check_internal_dns()
+
+
+def test_internal_dns_skips_a_stopped_external_service(monkeypatch):
+    records = healthy_records()
+    next(record for record in records if record["Service"] == "inventory").update({"State": "exited"})
+
+    def run(args):
+        if args[:3] == ["docker", "compose", "ps"]:
+            return result(json.dumps(records))
+        probed = args[-1].split("for name in ", 1)[1].split(";", 1)[0]
+        assert probed.split() == [name for name in health.DNS_NAMES if name != "inventory"]
+        return result("\n".join(f"OK {name}" for name in probed.split()))
+
+    monkeypatch.setattr(health, "run_command", run)
+    assert health.check_internal_dns()
+
+
+def test_internal_dns_reports_an_unresolved_running_service(monkeypatch, capsys):
+    def run(args):
+        if args[:3] == ["docker", "compose", "ps"]:
+            return result(json.dumps(healthy_records()))
+        lines = [f"FAIL {name}" if name == "kafka" else f"OK {name}" for name in health.DNS_NAMES]
+        return result("\n".join(lines), code=1)
+
+    monkeypatch.setattr(health, "run_command", run)
+    assert not health.check_internal_dns()
+    assert "INFRAESTRUCTURA: DNS interno sin resolver: kafka" in capsys.readouterr().out
+
+
+def test_internal_dns_requires_a_running_postgres(monkeypatch):
+    records = healthy_records()
+    next(record for record in records if record["Service"] == "postgres").update({"State": "exited"})
+    monkeypatch.setattr(health, "run_command", lambda args: result(json.dumps(records)))
+    assert not health.check_internal_dns()
+
+
+def test_internal_dns_reports_probe_failures(monkeypatch):
+    def run(args):
+        if args[:3] == ["docker", "compose", "ps"]:
+            return result(json.dumps(healthy_records()))
+        return result("", code=1, stderr="service postgres is not running")
+
+    monkeypatch.setattr(health, "run_command", run)
+    assert not health.check_internal_dns()
+
+
+@pytest.mark.parametrize(
+    "failed",
+    [None, "check_containers", "check_internal_dns", "check_http_endpoints", "check_topics"],
+)
 def test_exit_code_and_all_checks_run(monkeypatch, failed):
     called = []
-    for name in ("check_containers", "check_http_endpoints", "check_topics"):
+    for name in ("check_containers", "check_internal_dns", "check_http_endpoints", "check_topics"):
         def check(name=name):
             called.append(name)
             return name != failed
         monkeypatch.setattr(health, name, check)
     assert health.main() == (0 if failed is None else 1)
-    assert called == ["check_containers", "check_http_endpoints", "check_topics"]
+    assert called == ["check_containers", "check_internal_dns", "check_http_endpoints", "check_topics"]

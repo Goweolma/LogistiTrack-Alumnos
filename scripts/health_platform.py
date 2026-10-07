@@ -1,7 +1,7 @@
 """Valida la salud completa de la plataforma LogistiTrack.
 
-Comprueba el estado de los contenedores, sus healthchecks, los endpoints HTTP
-y la existencia de los seis topics de Kafka.
+Comprueba el estado de los contenedores, sus healthchecks, el DNS interno,
+los endpoints HTTP y la existencia de los seis topics de Kafka.
 """
 
 from __future__ import annotations
@@ -42,6 +42,16 @@ HTTP_HEALTHCHECKS = {
 }
 HEALTHY_SERVICES = {"postgres", "kafka", "orders"}
 INFRASTRUCTURE_SERVICES = {"postgres", "kafka", "kafka-init"}
+# kafka-init termina y desaparece del DNS. Solo se resuelven servicios vivos.
+DNS_NAMES = (
+    "postgres",
+    "kafka",
+    "orders",
+    "inventory",
+    "warehouse",
+    "delivery",
+    "frontend",
+)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -154,6 +164,45 @@ def check_containers() -> bool:
     return all_ok
 
 
+def check_internal_dns() -> bool:
+    """Resuelve por nombre los servicios que siguen en ejecución."""
+    result = run_command(["docker", "compose", "ps", "--all", "--format", "json"])
+    if result.returncode != 0:
+        return report(False, f"INFRAESTRUCTURA: DNS interno: {result.stderr.strip()}")
+    try:
+        records = parse_compose_records(result.stdout)
+    except ValueError as exc:
+        return report(False, f"INFRAESTRUCTURA: DNS interno: {exc}")
+
+    running = {record.get("Service") for record in records if record.get("State") == "running"}
+    if "postgres" not in running:
+        return report(False, "INFRAESTRUCTURA: DNS interno: postgres no está en ejecución")
+    required = [name for name in DNS_NAMES if name in running]
+    script = (
+        "missing=0; "
+        f"for name in {' '.join(required)}; do "
+        "if getent hosts \"$name\" >/dev/null; then echo OK \"$name\"; "
+        "else echo FAIL \"$name\"; missing=1; fi; "
+        "done; exit $missing"
+    )
+    probed = run_command(["docker", "compose", "exec", "-T", "postgres", "bash", "-c", script])
+    resolved = set()
+    failed = set()
+    for line in probed.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0] == "OK":
+            resolved.add(parts[1])
+        elif len(parts) == 2 and parts[0] == "FAIL":
+            failed.add(parts[1])
+    if resolved | failed != set(required) or probed.returncode not in (0, 1):
+        detail = probed.stderr.strip() or "sin respuesta de getent"
+        return report(False, f"INFRAESTRUCTURA: DNS interno: {detail}")
+    missing = [name for name in required if name not in resolved]
+    if not missing and not failed:
+        return report(True, "DNS interno: los servicios en ejecución se resuelven por nombre")
+    return report(False, "INFRAESTRUCTURA: DNS interno sin resolver: " + ", ".join(missing))
+
+
 def check_http_endpoints() -> bool:
     all_ok = True
     for service, url in HTTP_HEALTHCHECKS.items():
@@ -192,9 +241,14 @@ def check_topics() -> bool:
 
 
 def main() -> int:
-    checks: Iterable[bool] = (check_containers(), check_http_endpoints(), check_topics())
+    checks: Iterable[bool] = (
+        check_containers(),
+        check_internal_dns(),
+        check_http_endpoints(),
+        check_topics(),
+    )
     if all(checks):
-        print("Plataforma saludable: contenedores, endpoints y topics verificados.")
+        print("Plataforma saludable: contenedores, DNS interno, endpoints y topics verificados.")
         return 0
     print("La plataforma requiere atención. Resolver infraestructura primero; los fallos de servicios del equipo requieren revisar sus dependencias y logs.")
     return 1
