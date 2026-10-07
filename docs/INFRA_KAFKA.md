@@ -8,10 +8,15 @@
   `--if-not-exists` y los seis topics del contrato.
 - La red tiene el nombre explícito `logistitrack`. Antes Docker añadía el
   prefijo del proyecto al nombre real. Los puertos y DNS internos se conservan.
-- `common/kafka_client.py`: `publish()` y `publish_dead_letter()` esperan
-  confirmación del broker. Un timeout, rechazo o callback ausente produce
-  `PublishError` (subclase de `RuntimeError`). Antes se ignoraba el resultado
-  de `flush(5)` y el consumidor podía confirmar un offset sin entrega efectiva.
+- `common/kafka_client.py`: `publish_confirmed()` es el helper común.
+  `publish()` y `publish_dead_letter()` lo usan. Un timeout, rechazo o
+  callback ausente produce `PublishError` (subclase de `RuntimeError`).
+  Inventario y reparto no se editan. El reemplazo queda comentado en
+  `common/kafka_client.py` para que cada alumno lo aplique en su servicio
+  y conserve `PublishError` o `RetryLater`.
+- `.github/workflows/tests.yml`: además de pytest, el job `compose` copia
+  `.env.example` a `.env`, valida la configuración y arranca la plataforma.
+  No se sube `.env`.
 - `tests/test_infrastructure_events.py`: cubre los tres fallos tanto en el
   topic solicitado como en dead-letter. Los dobles simulan callbacks de entrega;
   las dependencias Kafka reales siguen instaladas.
@@ -19,7 +24,41 @@
 No se cambian contratos, topics, grupos ni configuración de consumidores:
 `earliest` y `enable.auto.commit=False`. No se editan servicios ni frontend.
 
+## Validador
+
+`validate_event` exige `event_id` con el formato `8-4-4-4-12` de
+`contracts/event.schema.json` (`format: uuid`). Antes, `UUID()` aceptaba
+valores sin guiones, con llaves o `urn:uuid:`, y `publish` los enviaba al
+topic de negocio. Esas formas quedan solo en `dead-letter`. Las mayúsculas
+siguen siendo válidas, igual que en el esquema. No se modifica `contracts/`:
+un cambio de contrato pide otro Pull Request y la aprobación del profesor.
+
+`version` sigue siendo el entero `1`. El `const: 1` del esquema también acepta
+`1.0` por comparación numérica; Python lo rechaza antes de publicar. No se
+afirma que el validador y el esquema sean equivalentes.
+
+## Versiones
+
+Los pines compartidos de `requirements-dev.txt`, pedidos, almacén y reparto
+son `Flask==3.1.0`, `psycopg[binary]==3.2.3` y `confluent-kafka==2.6.1`.
+Inventario declara `Flask==3.1.3`, `psycopg[binary]==3.3.6` y
+`confluent-kafka==2.15.1`. No se modifica
+`services/inventory/requirements.txt`: lo alinea el alumno de inventario
+cuando le corresponda. No se sube al resto a `2.15.1`.
+
+Postgres, Kafka, `kafka-init`, las cuatro APIs y el frontend tienen healthcheck.
+Las APIs consultan su propio `localhost`. `kafka-init` consulta `kafka:9092`
+mientras crea los topics; su éxito de arranque sigue siendo terminar con código 0.
+Entre contenedores se usan `kafka`, `postgres`, `inventory`, `warehouse` y `delivery`.
+
 ## Prueba reproducible (PowerShell o terminal Linux)
+
+Antes del primer arranque, copiar `.env.example` a `.env` (`Copy-Item` en
+PowerShell o `cp` en Linux). No sobrescribir una configuración local existente.
+`POSTGRES_PASSWORD` y `DATABASE_URL` son obligatorios: Compose rechaza valores
+ausentes o vacíos en vez de usar una contraseña incluida en el YAML. Mantener
+ambos sincronizados; `.env.example` conserva solo valores de demostración.
+Las variantes locales `.env.*` también se ignoran, salvo `.env.example`.
 
 ```text
 python -m pip install -r requirements-dev.txt
@@ -40,7 +79,10 @@ contenedores se usan `kafka`, `postgres` y los nombres de servicios.
 
 ## Evidencia del 7 de octubre de 2026
 
-- Rama individual: 86 pruebas aprobadas en Python 3.11.9, sin fallos ni saltos.
+- Rehecho sobre `develop` en `895d17b` (incluye el PR #42 de reparto).
+  `python -m pytest -q`: 146 aprobadas y 1 omitida. `docker compose config --quiet` válido.
+  No se modifican `services/` ni `frontend/`.
+- Rama individual anterior: 86 pruebas aprobadas en Python 3.11.9, sin fallos ni saltos.
 - Combinada localmente con el PR de salud: 117 pruebas aprobadas en Python 3.12
   dentro de Docker, usando las dependencias reales de `requirements-dev.txt`.
 - Compose válido, siete servicios activos y `kafka-init` terminado en 0.
@@ -67,7 +109,8 @@ contenedores; no requiere eliminar `postgres_data`.
 |---|---|---|
 | `services/orders/app.py` | `POST /api/orders` devuelve 501 para pedidos válidos; no inicia el flujo. | Alumno 1: persistir pedido/historial y publicar `ORDER_CREATED`. |
 | `services/orders/app.py` | `/api/products` devuelve una lista vacía fija. | Alumnos 1/2: integrar el catálogo persistido. |
-| `services/delivery/app.py` | Usa columnas `orders.driver_id`, `orders.vehicle_id`, `order_history.event_id` y `order_history.event` ausentes en el DDL compartido. | Alumno 4 con alumnos 1/2: acordar y entregar la migración compatible; el propio módulo declara pendiente ese acuerdo. |
+| `services/inventory/app.py` y `services/delivery/app.py` | Cada uno repite `produce` y `flush`. El helper común ya confirma, también en dead-letter. | Alumno de inventario y alumno de reparto: aplicar el comentario de `common/kafka_client.py`. Conservar `PublishError`, `RetryLater`, la clave `order_id` y el timeout de 10 s. |
+| `services/inventory/requirements.txt` | Pines distintos al resto: Flask 3.1.3, psycopg 3.3.6, confluent-kafka 2.15.1. | Alumno de inventario: igualar a Flask 3.1.0, psycopg 3.2.3 y confluent-kafka 2.6.1. |
 
 Estos problemas no se solucionan alterando APIs desde infraestructura. Un
 healthcheck HTTP exitoso no demuestra que el recorrido de pedidos esté completo.

@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 import re
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 
 def build_event(event_type: str, order_id: str, source: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -41,12 +41,13 @@ def validate_event(event: dict[str, Any]) -> None:
     if extra:
         raise ValueError(f"El evento contiene campos no permitidos: {sorted(extra)}")
 
-    if not isinstance(event["event_id"], str):
-        raise ValueError("event_id debe ser una cadena UUID")
-    try:
-        UUID(event["event_id"])
-    except (ValueError, TypeError, AttributeError) as exc:
-        raise ValueError("event_id debe ser una cadena UUID válida") from exc
+    # El esquema exige format: uuid (8-4-4-4-12). UUID() también acepta formas
+    # sin guiones, con llaves o urn:uuid, y esas no deben publicarse.
+    if not isinstance(event["event_id"], str) or re.fullmatch(
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+        event["event_id"],
+    ) is None:
+        raise ValueError("event_id debe ser un UUID con guiones, como exige el esquema")
 
     if not isinstance(event["event_type"], str) or len(event["event_type"]) < 3:
         raise ValueError("event_type debe ser una cadena de al menos 3 caracteres")
