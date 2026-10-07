@@ -186,6 +186,54 @@ def test_internal_dns_requires_a_running_postgres(monkeypatch):
     assert not health.check_internal_dns()
 
 
+def network_payload(network_id="net-1", name="logistitrack-alumnos_logistitrack"):
+    return json.dumps({name: {"NetworkID": network_id, "IPAddress": ""}})
+
+
+def labels_payload(network="logistitrack"):
+    return json.dumps({"com.docker.compose.network": network, "com.docker.compose.project": "logistitrack-alumnos"})
+
+
+def mock_network(monkeypatch, records=None, networks=None, labels=labels_payload(), inspect_code=0):
+    def run(args):
+        if args[:3] == ["docker", "compose", "ps"]:
+            return result(json.dumps(healthy_records() if records is None else records))
+        if args[:2] == ["docker", "inspect"]:
+            if inspect_code != 0:
+                return result("", inspect_code, "inspect failed")
+            payload = networks(args[-1]) if callable(networks) else (networks or network_payload())
+            return result(payload)
+        if args[:2] == ["docker", "network"]:
+            return result(labels)
+        raise AssertionError(args)
+
+    monkeypatch.setattr(health, "run_command", run)
+
+
+def test_shared_network_accepts_project_prefix_when_label_matches(monkeypatch):
+    mock_network(monkeypatch)
+    assert health.check_shared_network()
+
+
+def test_shared_network_rejects_a_split_or_unlabeled_network(monkeypatch):
+    mock_network(monkeypatch, networks=lambda container: network_payload("other" if container == "delivery-id" else "net-1"))
+    assert not health.check_shared_network()
+    mock_network(monkeypatch, labels=labels_payload("other"))
+    assert not health.check_shared_network()
+
+
+def test_shared_network_rejects_extra_networks_and_missing_containers(monkeypatch, capsys):
+    mock_network(monkeypatch, networks=json.dumps({
+        "logistitrack": {"NetworkID": "net-1"},
+        "extra": {"NetworkID": "net-2"},
+    }))
+    assert not health.check_shared_network()
+    records = [record for record in healthy_records() if record["Service"] != "inventory"]
+    mock_network(monkeypatch, records=records)
+    assert not health.check_shared_network()
+    assert "BLOQUEADO POR DEPENDENCIA EXTERNA: inventory" in capsys.readouterr().out
+
+
 def test_internal_dns_reports_probe_failures(monkeypatch):
     def run(args):
         if args[:3] == ["docker", "compose", "ps"]:
@@ -198,14 +246,16 @@ def test_internal_dns_reports_probe_failures(monkeypatch):
 
 @pytest.mark.parametrize(
     "failed",
-    [None, "check_containers", "check_internal_dns", "check_http_endpoints", "check_topics"],
+    [None, "check_containers", "check_internal_dns", "check_shared_network", "check_http_endpoints", "check_topics"],
 )
 def test_exit_code_and_all_checks_run(monkeypatch, failed):
     called = []
-    for name in ("check_containers", "check_internal_dns", "check_http_endpoints", "check_topics"):
+    for name in ("check_containers", "check_internal_dns", "check_shared_network", "check_http_endpoints", "check_topics"):
         def check(name=name):
             called.append(name)
             return name != failed
         monkeypatch.setattr(health, name, check)
     assert health.main() == (0 if failed is None else 1)
-    assert called == ["check_containers", "check_internal_dns", "check_http_endpoints", "check_topics"]
+    assert called == [
+        "check_containers", "check_internal_dns", "check_shared_network", "check_http_endpoints", "check_topics",
+    ]

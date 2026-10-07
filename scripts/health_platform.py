@@ -1,7 +1,7 @@
 """Valida la salud completa de la plataforma LogistiTrack.
 
 Comprueba el estado de los contenedores, sus healthchecks, el DNS interno,
-los endpoints HTTP y la existencia de los seis topics de Kafka.
+la red compartida, los endpoints HTTP y los seis topics de Kafka.
 """
 
 from __future__ import annotations
@@ -43,6 +43,7 @@ HTTP_HEALTHCHECKS = {
 HEALTHY_SERVICES = {"postgres", "kafka", "orders"}
 INFRASTRUCTURE_SERVICES = {"postgres", "kafka", "kafka-init"}
 # kafka-init termina y desaparece del DNS. Solo se resuelven servicios vivos.
+COMPOSE_NETWORK = "logistitrack"
 DNS_NAMES = (
     "postgres",
     "kafka",
@@ -164,6 +165,77 @@ def check_containers() -> bool:
     return all_ok
 
 
+def check_shared_network() -> bool:
+    """Los ocho servicios deben compartir la red que Compose llama logistitrack.
+
+    El nombre visible de Docker puede llevar el prefijo del proyecto. La etiqueta
+    com.docker.compose.network es la que declara el archivo.
+    """
+    result = run_command(["docker", "compose", "ps", "--all", "--format", "json"])
+    if result.returncode != 0:
+        return report(False, f"INFRAESTRUCTURA: red interna: {result.stderr.strip()}")
+    try:
+        records = parse_compose_records(result.stdout)
+    except ValueError as exc:
+        return report(False, f"INFRAESTRUCTURA: red interna: {exc}")
+
+    by_service = {record.get("Service"): record for record in records}
+    network_ids = []
+    all_ok = True
+    for service in sorted(EXPECTED_SERVICES):
+        record = by_service.get(service)
+        container_id = record.get("ID") if isinstance(record, dict) else None
+        if not container_id:
+            service_report(False, service, f"{service}: sin contenedor para comprobar la red")
+            all_ok = False
+            continue
+        inspected = run_command([
+            "docker", "inspect", "--format", "{{json .NetworkSettings.Networks}}", container_id,
+        ])
+        if inspected.returncode != 0:
+            report(False, f"INFRAESTRUCTURA: {service}: red no inspeccionable: {inspected.stderr.strip()}")
+            all_ok = False
+            continue
+        try:
+            networks = json.loads(inspected.stdout)
+            if not isinstance(networks, dict):
+                raise ValueError("Se esperaba el mapa de redes del contenedor")
+        except ValueError as exc:
+            report(False, f"INFRAESTRUCTURA: {service}: redes inválidas: {exc}")
+            all_ok = False
+            continue
+        if len(networks) != 1:
+            report(False, f"INFRAESTRUCTURA: {service}: debe usar solo la red de Compose")
+            all_ok = False
+            continue
+        info = next(iter(networks.values()))
+        network_id = info.get("NetworkID") if isinstance(info, dict) else None
+        if not network_id:
+            report(False, f"INFRAESTRUCTURA: {service}: sin identificador de red")
+            all_ok = False
+            continue
+        network_ids.append(network_id)
+
+    if not all_ok:
+        return False
+    if len(set(network_ids)) != 1:
+        return report(False, "INFRAESTRUCTURA: los servicios no comparten una sola red")
+
+    labels = run_command(["docker", "network", "inspect", "--format", "{{json .Labels}}", network_ids[0]])
+    if labels.returncode != 0:
+        return report(False, f"INFRAESTRUCTURA: etiqueta de red: {labels.stderr.strip()}")
+    try:
+        decoded = json.loads(labels.stdout)
+    except ValueError as exc:
+        return report(False, f"INFRAESTRUCTURA: etiqueta de red inválida: {exc}")
+    ok = isinstance(decoded, dict) and decoded.get("com.docker.compose.network") == COMPOSE_NETWORK
+    message = (
+        "Red Compose logistitrack compartida por los ocho servicios"
+        if ok else "INFRAESTRUCTURA: la red compartida no es la red logistitrack de Compose"
+    )
+    return report(ok, message)
+
+
 def check_internal_dns() -> bool:
     """Resuelve por nombre los servicios que siguen en ejecución."""
     result = run_command(["docker", "compose", "ps", "--all", "--format", "json"])
@@ -244,11 +316,12 @@ def main() -> int:
     checks: Iterable[bool] = (
         check_containers(),
         check_internal_dns(),
+        check_shared_network(),
         check_http_endpoints(),
         check_topics(),
     )
     if all(checks):
-        print("Plataforma saludable: contenedores, DNS interno, endpoints y topics verificados.")
+        print("Plataforma saludable: contenedores, DNS, red, endpoints y topics verificados.")
         return 0
     print("La plataforma requiere atención. Resolver infraestructura primero; los fallos de servicios del equipo requieren revisar sus dependencias y logs.")
     return 1
