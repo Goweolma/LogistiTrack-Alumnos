@@ -138,8 +138,14 @@ def reserve_inventory(event: dict[str, Any], quantities: dict[str, int]) -> tupl
                 "SELECT status FROM orders WHERE order_id = %s FOR UPDATE",
                 (event["order_id"],),
             )
-            if cursor.fetchone() is None:
+            row = cursor.fetchone()
+            if row is None:
                 raise ValueError(f"ORDER_NOT_FOUND: {event['order_id']} no existe en orders")
+
+            # Otro ORDER_CREATED (distinto event_id) no debe reservar de nuevo ni regresar el estado del pedido.
+            current_status = row[0]
+            if current_status != "RECEIVED":
+                raise ValueError(f"INVALID_ORDER_STATE: se esperaba RECEIVED, pero está en {current_status}")
 
             # FOR UPDATE evita que dos pedidos reserven la misma existencia al mismo tiempo.
             cursor.execute(
