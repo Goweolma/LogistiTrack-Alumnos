@@ -33,10 +33,10 @@ un cambio de contrato pide otro Pull Request y la aprobación del profesor.
 `1.0` por comparación numérica; Python lo rechaza antes de publicar. No se
 afirma que el validador y el esquema sean equivalentes.
 
-Inventory, warehouse, delivery y frontend tienen healthcheck en Compose. Cada
-uno consulta su propio `localhost` o `127.0.0.1`. Entre contenedores se siguen
-usando `kafka`, `postgres`, `inventory`, `warehouse` y `delivery`. `kafka-init`
-no lleva healthcheck: su éxito es terminar con código 0.
+Postgres, Kafka, `kafka-init`, las cuatro APIs y el frontend tienen healthcheck.
+Las APIs consultan su propio `localhost`. `kafka-init` consulta `kafka:9092`
+mientras crea los topics; su éxito de arranque sigue siendo terminar con código 0.
+Entre contenedores se usan `kafka`, `postgres`, `inventory`, `warehouse` y `delivery`.
 
 ## Prueba reproducible (PowerShell o terminal Linux)
 

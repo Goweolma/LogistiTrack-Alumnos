@@ -63,6 +63,12 @@ services:
         for topic in orders inventory warehouse deliveries order-status dead-letter; do
           /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic $$topic --partitions 3 --replication-factor 1;
         done
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 6
+      start_period: 5s
     networks: [logistitrack]
 
   orders:

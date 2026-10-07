@@ -25,7 +25,8 @@ def test_kafka_init_creates_the_six_topics_in_one_command():
     assert "set -e;" in command
     assert "--create --if-not-exists --topic $$topic" in command
     assert "for topic in orders inventory warehouse deliveries order-status dead-letter; do" in command
-    assert "healthcheck:" not in command
+    assert command.count("healthcheck:") == 1
+    assert "kafka:9092" in command
 
 
 def test_services_meet_by_name_on_the_logistitrack_network():
