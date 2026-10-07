@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-
+import pytest
 import services.orders.app as orders
 
 
@@ -207,3 +207,53 @@ def test_database_error_returns_503(monkeypatch):
     assert response.get_json() == {
         "error": "DATABASE_UNAVAILABLE"
     }
+
+
+def test_create_order_rejects_invalid_json():
+    client = orders.app.test_client()
+
+    response = client.post(
+        "/api/orders",
+        data="esto no es json",
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": "INVALID_ORDER",
+        "detail": "INVALID_JSON",
+    }
+
+
+@pytest.mark.parametrize(
+    "payload, detail",
+    [
+        ({"delivery_address": "", "items": [{"product_id": "PROD-001", "quantity": 1}]},
+         "INVALID_DELIVERY_ADDRESS"),
+        ({"delivery_address": "A" * 201, "items": [{"product_id": "PROD-001", "quantity": 1}]},
+         "INVALID_DELIVERY_ADDRESS"),
+        ({"delivery_address": "Casa", "items": []}, "INVALID_ITEMS"),
+        ({"delivery_address": "Casa", "items": [{"quantity": 1}]},
+         "INVALID_PRODUCT_ID"),
+        ({"delivery_address": "Casa", "items": [{"product_id": "PROD-001", "quantity": 0}]},
+         "INVALID_QUANTITY"),
+        ({"delivery_address": "Casa", "items": [{"product_id": "PROD-001", "quantity": -1}]},
+         "INVALID_QUANTITY"),
+        ({"delivery_address": "Casa", "items": [{"product_id": "PROD-001", "quantity": 1.5}]},
+         "INVALID_QUANTITY"),
+        ({"delivery_address": "Casa", "items": [{"product_id": "PROD-001", "quantity": "2"}]},
+         "INVALID_QUANTITY"),
+        ({"delivery_address": "Casa", "items": [{"product_id": "PROD-001", "quantity": True}]},
+         "INVALID_QUANTITY"),
+        ({"delivery_address": "Casa", "items": [
+            {"product_id": "PROD-001", "quantity": 1},
+            {"product_id": " PROD-001 ", "quantity": 2},
+        ]}, "DUPLICATE_PRODUCT"),
+    ],
+)
+def test_create_order_rejects_invalid_payload(payload, detail):
+    client = orders.app.test_client()
+    response = client.post("/api/orders", json=payload)
+
+    assert response.status_code == 400
+    assert response.get_json()["detail"] == detail
