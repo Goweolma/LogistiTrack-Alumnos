@@ -35,6 +35,28 @@ def test_inventory_reservations_keeps_one_result_per_event():
     assert "result_event JSONB NOT NULL" in block
 
 
+def test_orders_has_optional_delivery_columns():
+    block = _table_block("orders")
+    assert re.search(r"driver_id VARCHAR\(20\)\s*,", block)
+    assert re.search(r"vehicle_id VARCHAR\(20\)\s*$", block)
+
+
+def test_order_history_has_optional_event_columns_for_delivery():
+    block = _table_block("order_history")
+    assert re.search(r"event_id UUID UNIQUE\s*,", block)
+    assert re.search(r"event JSONB\s*$", block)
+
+
+def test_order_ids_come_from_a_bounded_sequence():
+    sequence = "CREATE SEQUENCE IF NOT EXISTS order_number_seq MINVALUE 1 MAXVALUE 999999 NO CYCLE;"
+    assert sequence in INIT_SQL
+    assert INIT_SQL.index(sequence) < INIT_SQL.index("CREATE TABLE IF NOT EXISTS orders")
+    assert (
+        "order_id VARCHAR(40) PRIMARY KEY DEFAULT ('PED-' || lpad(nextval('order_number_seq')::text, 6, '0'))"
+        in _table_block("orders")
+    )
+
+
 def test_inventory_only_allows_norte_and_sur():
     assert "CHECK (warehouse IN ('NORTE', 'SUR'))" in _table_block("inventory")
 

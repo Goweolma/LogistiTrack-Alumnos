@@ -31,20 +31,30 @@ CREATE TABLE IF NOT EXISTS inventory_reservations (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ALUMNO-2: numeración PED-000001 ... PED-999999. MAXVALUE evita que lpad recorte
+-- un número de siete dígitos y genere un ID repetido.
+CREATE SEQUENCE IF NOT EXISTS order_number_seq MINVALUE 1 MAXVALUE 999999 NO CYCLE;
+
 -- ALUMNO-1: tablas de pedidos.
 CREATE TABLE IF NOT EXISTS orders (
-    order_id VARCHAR(40) PRIMARY KEY,
+    order_id VARCHAR(40) PRIMARY KEY DEFAULT ('PED-' || lpad(nextval('order_number_seq')::text, 6, '0')),
     total NUMERIC(10, 2) NOT NULL CHECK (total >= 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     delivery_address VARCHAR(200) NOT NULL,
-    status VARCHAR(30) NOT NULL DEFAULT 'RECEIVED'
+    status VARCHAR(30) NOT NULL DEFAULT 'RECEIVED',
+    -- ALUMNO-2: columnas que asigna Delivery (vacías hasta DRIVER_ASSIGNED).
+    driver_id VARCHAR(20),
+    vehicle_id VARCHAR(20)
 );
 
 CREATE TABLE IF NOT EXISTS order_history (
     history_id SERIAL PRIMARY KEY,
     order_id VARCHAR(40) NOT NULL REFERENCES orders(order_id),
     status VARCHAR(30) NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- ALUMNO-2: Delivery guarda el evento para republicarlo tras un fallo; opcional para los demás servicios.
+    event_id UUID UNIQUE,
+    event JSONB
 );
 
 CREATE TABLE IF NOT EXISTS order_items (
