@@ -18,6 +18,8 @@ from common.kafka_client import (
     publish_dead_letter,
 )
 
+from uuid import NAMESPACE_URL, uuid5
+
 SERVICE_NAME = "warehouse"
 
 INVENTORY_TOPIC = "inventory"
@@ -180,6 +182,23 @@ def calculate_preparation_seconds(payload: dict[str, Any]) -> float:
     # Evita que una cantidad muy grande congele la demostración.
     return round(min(estimated_seconds, 30.0), 2)
 
+def build_warehouse_event(
+    event_type: str,
+    reservation: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    outgoing = build_event(
+        event_type, reservation["order_id"], SERVICE_NAME, payload
+    )
+    outgoing["event_id"] = str(
+        uuid5(
+            NAMESPACE_URL,
+            f"logistitrack/warehouse/{reservation['event_id']}/{event_type}",
+        )
+    )
+    return outgoing
+
+
 def process_inventory_event(event: dict[str, Any], producer) -> str:
     """Procesa únicamente eventos INVENTORY_RESERVED."""
     validate_event(event)
@@ -221,11 +240,8 @@ def process_inventory_event(event: dict[str, Any], producer) -> str:
     )
 
     if preparing_result != "advanced":
-        preparing_event = build_event(
-            "PREPARING",
-            order_id,
-            SERVICE_NAME,
-            preparing_payload,
+        preparing_event = build_warehouse_event(
+            "PREPARING", event, preparing_payload
         )
         publish(producer, STATUS_TOPIC, preparing_event)
 
@@ -249,19 +265,13 @@ def process_inventory_event(event: dict[str, Any], producer) -> str:
     )
 
     if ready_result != "advanced":
-        ready_status_event = build_event(
-            "READY_FOR_DELIVERY",
-            order_id,
-            SERVICE_NAME,
-            ready_payload,
+        ready_status_event = build_warehouse_event(
+            "READY_FOR_DELIVERY", event, ready_payload
         )
         publish(producer, STATUS_TOPIC, ready_status_event)
 
-        order_ready_event = build_event(
-            "ORDER_READY",
-            order_id,
-            SERVICE_NAME,
-            ready_payload,
+        order_ready_event = build_warehouse_event(
+            "ORDER_READY", event, ready_payload
         )
         publish(producer, WAREHOUSE_TOPIC, order_ready_event)
 
