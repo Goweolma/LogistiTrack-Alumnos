@@ -3,42 +3,116 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LogistiTrack | Base alumnos</title>
+  <title>LogistiTrack</title>
   <link rel="stylesheet" href="/css/styles.css">
 </head>
 <body>
   <main class="container">
-    <header>
-      <p class="eyebrow">Sistemas Distribuidos</p>
-      <h1>LogistiTrack</h1>
-      <p>Base colaborativa para siete integrantes</p>
+    <header class="main-header">
+      <div>
+        <p class="eyebrow">Sistemas Distribuidos</p>
+        <h1>LogistiTrack</h1>
+        <p>Pedidos, inventario y salud de la plataforma</p>
+      </div>
+      <span id="status" class="badge">CARGANDO</span>
     </header>
 
-    <section class="card">
+    <nav class="nav" aria-label="Secciones">
+      <a href="#salud">Salud</a>
+      <a href="#pedido">Nuevo pedido</a>
+      <a href="#tablero">Tablero</a>
+      <a href="#seguimiento">Seguimiento</a>
+      <a href="#inventario">Inventario</a>
+    </nav>
+
+    <section id="salud" class="card">
       <div class="status-row">
         <div>
           <h2>Estado de la plataforma</h2>
           <p id="message">Comprobando conexión...</p>
         </div>
-        <span id="status" class="badge">CARGANDO</span>
+        <button id="refresh" type="button">Actualizar</button>
+      </div>
+      <div id="services" class="services"></div>
+      <p class="notice">La salud entra por <code>/api/services/&lt;servicio&gt;/health</code>. Inventario usa <code>/api/inventory</code>. Almacén y reparto ya tienen prefijo en el proxy para cuando publiquen su API.</p>
+    </section>
+
+    <section id="pedido" class="card">
+      <h2>Nuevo pedido</h2>
+      <p id="catalogNotice" class="notice"></p>
+      <form id="orderForm">
+        <div class="form-grid">
+          <div>
+            <label for="address">Dirección de entrega</label>
+            <input id="address" name="delivery_address" maxlength="200" required autocomplete="street-address">
+          </div>
+          <div>
+            <label id="productLabel" for="productId">Producto</label>
+            <select id="productId"></select>
+            <input id="productIdManual" hidden placeholder="PROD-000">
+          </div>
+          <div>
+            <label for="quantity">Cantidad</label>
+            <input id="quantity" type="number" min="1" step="1" value="1" required>
+          </div>
+        </div>
+        <button id="addItem" type="button">Agregar producto</button>
+        <ul id="draftItems" class="draft-list"></ul>
+        <p id="formError" class="field-error" role="alert"></p>
+        <button type="submit">Crear pedido</button>
+        <p id="formResult" class="notice" role="status"></p>
+      </form>
+    </section>
+
+    <section id="tablero" class="card">
+      <h2>Tablero de pedidos</h2>
+      <div class="filters">
+        <div class="search-box">
+          <label class="visually-hidden" for="search">Buscar por pedido o dirección</label>
+          <input id="search" type="search" placeholder="Buscar por pedido o dirección">
+        </div>
+        <div>
+          <label class="visually-hidden" for="statusFilter">Filtrar por estado</label>
+          <select id="statusFilter">
+            <option value="">Todos los estados</option>
+          </select>
+        </div>
+      </div>
+      <p id="ordersMessage" class="notice"></p>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Pedido</th>
+              <th>Estado</th>
+              <th>Total</th>
+              <th>Dirección</th>
+              <th>Creado</th>
+            </tr>
+          </thead>
+          <tbody id="ordersBody"></tbody>
+        </table>
       </div>
     </section>
 
-    <section class="grid">
-      <article class="card"><strong>Pedidos</strong><p>TODO Alumno 1</p></article>
-      <article class="card"><strong>Inventario</strong><p>TODO Alumno 2</p></article>
-      <article class="card"><strong>Almacén</strong><p>TODO Alumno 3</p></article>
-      <article class="card"><strong>Entrega</strong><p>TODO Alumno 4</p></article>
-      <article class="card"><strong>Infraestructura</strong><p>TODO Alumno 5</p></article>
-      <article class="card"><strong>Dashboard</strong><p>TODO Alumno 6</p></article>
-      <article class="card"><strong>QA y manual</strong><p>TODO Alumno 7</p></article>
+    <section id="seguimiento" class="card">
+      <h2>Seguimiento</h2>
+      <form id="trackForm" class="search-box">
+        <div>
+          <label for="trackId">Identificador</label>
+          <input id="trackId" placeholder="PED-000001" required>
+        </div>
+        <button type="submit">Consultar</button>
+      </form>
+      <div id="trackingResult"></div>
     </section>
 
-    <section class="card">
-      <h2>Siguiente meta del equipo</h2>
-      <code>POST /api/orders → ORDER_CREATED → INVENTORY_RESERVED</code>
+    <section id="inventario" class="card">
+      <h2>Inventario por almacén</h2>
+      <p id="inventoryMessage" class="notice"></p>
+      <div id="inventoryGrid" class="inventory-grid"></div>
     </section>
   </main>
-  <script src="/js/app.js"></script>
+  <script type="module" src="/js/app.js"></script>
 </body>
 </html>
