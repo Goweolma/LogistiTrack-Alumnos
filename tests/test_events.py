@@ -1,3 +1,5 @@
+import pytest
+
 from common.events import build_event, validate_event
 
 
@@ -9,6 +11,9 @@ def test_build_event_contains_contract_fields():
     assert event["event_id"]
 
 
-def test_team_must_add_more_cases():
-    # TODO(ALUMNO-7): sustituir esta prueba por errores de contrato y flujo final.
-    assert True
+def test_invalid_order_id_is_rejected_before_the_business_flow():
+    event = build_event("ORDER_CREATED", "PED-000001", "orders", {"quantity": 1})
+    event["order_id"] = "ORD-1"
+
+    with pytest.raises(ValueError, match="PED-000000"):
+        validate_event(event)

@@ -35,7 +35,9 @@ docker compose up -d --build
 docker compose ps
 ```
 
-Abrir <http://localhost:8080>.
+Abrir <http://localhost:8080>. El tablero llama a las APIs por el mismo
+origen. Si un servicio aún no implementa su ruta, la pantalla lo indica y
+conserva el contrato de `POST /api/orders`.
 
 Validar la base:
 
@@ -44,8 +46,10 @@ python -m pip install -r requirements-dev.txt
 python scripts\smoke_base.py
 ```
 
-La prueba base solo comprueba que la plataforma arranca. La prueba final deberá
-validar creación y recorrido completo de pedidos.
+La prueba base solo comprueba que la plataforma arranca. La prueba de
+aceptación vive en `scripts/acceptance_flow.py` y el manual único en
+`docs/MANUAL.md`. Un `POST /api/orders` que responde 501 queda registrado
+como bloqueado: no cuenta como recorrido completo.
 
 ## Ramas
 
