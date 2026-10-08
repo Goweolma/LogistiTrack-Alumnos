@@ -2,10 +2,14 @@
 
 Documento único de operación, APIs, eventos y pruebas. La plantilla vacía
 sigue en `docs/PLANTILLA_MANUAL.md`. Este manual describe el estado real del
-código: la plataforma arranca y el navegador ya llama a las APIs, pero el
-alta de pedidos todavía no cierra el flujo de negocio.
+código: el alta ya persiste pedidos y publica `ORDER_CREATED`, y el navegador
+consulta las APIs. El recorrido integrado aún requiere evidencia con Docker.
 
 Fecha de esta revisión: 8 de octubre de 2026.
+
+Anexos: [guía del código](CODIGO_TECNICO.md), [contrato y payloads](../contracts/events.md)
+y [resultados de QA](QA_RESULTADOS.md). Las rutas de los demás alumnos se
+consultan para documentar su comportamiento, sin modificarlas.
 
 ## 1. Portada
 
@@ -82,6 +86,8 @@ Abrir <http://localhost:8080>.
 Comprobaciones:
 
 ```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements-dev.txt
 python -m pytest -q
 python scripts\health_platform.py
@@ -102,6 +108,8 @@ git pull origin develop
 cp .env.example .env
 docker compose up -d --build
 docker compose ps -a
+python3 -m venv .venv
+source .venv/bin/activate
 python3 -m pip install -r requirements-dev.txt
 python3 -m pytest -q
 python3 scripts/health_platform.py
@@ -124,7 +132,7 @@ y `DATABASE_URL`. No se sube `.env`.
 | `DATABASE_URL` | Conexión interna, host `postgres` y puerto `5432`. |
 | `KAFKA_BOOTSTRAP_SERVERS` | Por defecto `kafka:9092`. |
 | `PREPARATION_DELAY_SECONDS` | Espera de preparación. Por defecto 3. |
-| `DELIVERY_STEP_DELAY_SECONDS` | Espera entre etapas de reparto. Por defecto 2. |
+| `DELIVERY_STEP_DELAY_SECONDS` | Espera entre etapas de reparto, entre 0 y 30 segundos. Por defecto 2. |
 
 | Servicio | Puerto publicado | Dentro de la red |
 |---|---:|---|
@@ -169,8 +177,10 @@ desplazarse de lado.
    El identificador tiene la forma `PED-000001`.
 5. Inventario. `GET /api/inventory` separa las existencias de Norte y Sur.
 
-Cuando el alta aún no está implementada, el botón no rompe la página: muestra
-que la API respondió 501 y el cuerpo que ya se envió. Eso no crea un pedido.
+El alta exitosa devuelve 201 y el ID del pedido. Si responde 503
+`KAFKA_UNAVAILABLE`, el pedido ya quedó guardado: consultar el ID recibido antes
+de repetir el alta, porque otro POST puede crear un segundo pedido. La pantalla
+conserva el manejo de 501 `NOT_IMPLEMENTED` para versiones anteriores.
 
 Almacén y reparto no publican hoy un listado REST. Su prefijo
 (`/api/warehouse` y `/api/delivery`) ya está en Nginx para cuando lo agreguen.
@@ -186,22 +196,22 @@ completa.
 
 | Método y ruta | Respuesta actual |
 |---|---|
-| `GET /health` | 200 `{"service":"orders","status":"UP"}`. |
+| `GET /api/services/orders/health` | 200 `{"service":"orders","status":"UP"}`. Directamente en puerto 5001: `/health`. |
 | `GET /api/health` | 200 `{"status":"BASE_READY","message":"..."}`. |
 | `GET /api/products` | 200 y lista vacía. El catálogo de PostgreSQL todavía no sale por aquí. |
 | `GET /api/orders` | 200 y lista de `order_id`, `total`, `created_at`, `delivery_address`, `status`. 503 `DATABASE_UNAVAILABLE` si la base falla. |
 | `GET /api/orders/{id}` | 200 con `history` (`status`, `created_at`) e `items` (`product_id`, `quantity`). 404 `ORDER_NOT_FOUND`. 503 si la base falla. |
-| `POST /api/orders` | 400 `{"error":"INVALID_ORDER","detail":"..."}` si el cuerpo no sirve. Un cuerpo válido recibe 501 `{"error":"NOT_IMPLEMENTED"}`: no guarda ni publica `ORDER_CREATED`. |
+| `POST /api/orders` | 201 con `order_id`, `status=RECEIVED`, `total` e `items` tras persistir y publicar `ORDER_CREATED`. 400 `INVALID_ORDER` si la entrada o el producto no sirven; 503 `DATABASE_UNAVAILABLE` si falla la persistencia o `KAFKA_UNAVAILABLE` con `order_id` si falla la publicación posterior. |
 
 Detalles de validación del alta: `INVALID_JSON`, `INVALID_DELIVERY_ADDRESS`,
 `INVALID_ITEMS`, `INVALID_ITEM`, `INVALID_PRODUCT_ID`, `INVALID_QUANTITY`,
-`DUPLICATE_PRODUCT`.
+`DUPLICATE_PRODUCT`, `PRODUCT_NOT_FOUND`.
 
 ### Inventario
 
 | Método y ruta | Respuesta actual |
 |---|---|
-| `GET /health` | 200 `{"service":"inventory","status":"UP"}`. |
+| `GET /api/services/inventory/health` | 200 `{"service":"inventory","status":"UP"}`. Directamente en puerto 5002: `/health`. |
 | `GET /api/inventory` | 200 y lista con `product_id`, `name`, `description`, `price`, `stock` (`NORTE`, `SUR`) y `total`. 503 `DATABASE_UNAVAILABLE`. |
 | `GET /api/inventory/{product_id}` | 200 con el mismo objeto, o 404 `PRODUCT_NOT_FOUND`. |
 
@@ -231,13 +241,14 @@ antes de publicarlo en el topic de negocio.
 | `inventory` | `INVENTORY_RESERVED`, `INVENTORY_REJECTED` | inventory | warehouse |
 | `warehouse` | `ORDER_READY` | warehouse | delivery |
 | `deliveries` | `ORDER_IN_TRANSIT`, `ORDER_DELIVERED` | delivery | extensiones |
-| `order-status` | cambios visibles, incluido `READY_FOR_DELIVERY` y las etapas de reparto | todos | tablero y extensiones |
+| `order-status` | cambios visibles, incluido `READY_FOR_DELIVERY` y las etapas de reparto | servicios de negocio | extensiones; el tablero actual consulta REST, no Kafka |
 | `dead-letter` | `PROCESSING_FAILED` | todos | soporte |
 
 Inventario espera `payload.items` como lista de `product_id` y `quantity`.
-El detalle de cada payload de negocio sigue en el servicio que lo publica.
-Cambiar nombres de eventos pide otro Pull Request y la aprobación del profesor.
-Este manual no modifica `contracts/`.
+El detalle de cada payload está en [el catálogo](../contracts/events.md),
+contrastado con el servicio que lo publica. Cambiar nombres de eventos pide
+otro Pull Request y la aprobación del profesor. Esta revisión documenta el
+contrato existente sin cambiar nombres ni esquema.
 
 ## 11. Base de datos
 
@@ -246,9 +257,14 @@ Este manual no modifica `contracts/`.
 - `products`, `inventory` (Norte y Sur), `processed_events`.
 - `inventory_reservations` para repetir el resultado de una reserva.
 - `order_number_seq`, limitada a `PED-000001` … `PED-999999`.
-- `orders` (`driver_id` y `vehicle_id` quedan vacíos hasta el reparto).
-- `order_history` (`event_id` y `event` sirven para recuperar una publicación).
+- `orders` (incluye `driver_id` y `vehicle_id` opcionales; Delivery no escribe
+  esas columnas en su implementación actual).
+- `order_history` (incluye `event_id` y `event` opcionales).
 - `order_items`.
+
+Delivery crea al iniciar `delivery_assignments` para conductor y vehículo,
+y `delivery_events` para recuperar eventos persistidos. El historial visible
+usa `order_history`; la recuperación del reparto usa `delivery_events`.
 
 Datos de ejemplo: `PROD-001` Laptop empresarial, `PROD-002` Monitor 24
 pulgadas, `PROD-003` Teclado mecánico, con existencias en Norte y Sur.
@@ -264,13 +280,13 @@ borra los datos locales.
 | Compose, topics, salud y volumen | `python -m pytest -q` y `python scripts/health_platform.py` | Pytest en verde. El script de salud sale 0 con el motor de Docker en marcha. |
 | Contrato de eventos inválido | `tests/test_events.py` y `tests/test_infrastructure_events.py` | `order_id` mal formado y el resto de campos inválidos no pasan `validate_event`. El inválido va a `dead-letter`. |
 | Alta rechazada | `tests/test_orders.py` y el paso “alta invalida” de la aceptación | HTTP 400 e `INVALID_DELIVERY_ADDRESS` u otro `detail`. |
-| Alta válida | `python scripts/acceptance_flow.py` | **Bloqueado:** HTTP 501 `NOT_IMPLEMENTED`. No es un pedido creado. |
+| Alta válida | `tests/test_orders.py` y `python scripts/acceptance_flow.py` | HTTP 201, persistencia y publicación. La aceptación sigue el historial. |
 | Lista y detalle de pedidos | `tests/test_orders.py` | Lista, historial, 404 y 503. |
 | Inventario y reserva | `tests/test_inventory_schema.py`, `tests/test_inventory_consumer.py` | Esquema Norte/Sur, reserva, rechazo y `event_id` repetido. |
 | Almacén y reparto | `tests/test_warehouse.py`, `tests/test_delivery.py` | Preparación y etapas hasta `DELIVERED` en sus pruebas. |
 | Proxy del navegador | `tests/test_frontend_gateway.py`, `tests/test_frontend_api.py` | Cada servicio tiene prefijo y la pantalla llama esas rutas sin catálogo fijo. |
-| Tablero sin APIs | Abrir el HTML servido y crear un pedido | El formulario muestra el 501 o la falta de conexión y enseña el JSON enviado. |
-| Recorrido completo hasta `DELIVERED` | Aceptación, paso de seguimiento | **Pendiente** hasta que el alta deje de responder 501. |
+| Tablero sin APIs | Abrir el HTML servido y crear un pedido | El formulario muestra la falta de conexión y el JSON enviado. |
+| Recorrido completo hasta `DELIVERED` | `python scripts/acceptance_flow.py` con la plataforma activa | Exige el historial ordenado hasta `DELIVERED`. Sin Docker sigue pendiente de evidencia. |
 
 La aceptación se ejecuta con la plataforma levantada:
 
@@ -278,16 +294,23 @@ La aceptación se ejecuta con la plataforma levantada:
 python scripts/acceptance_flow.py
 ```
 
-Sale 0 si el proxy, las lecturas y el rechazo 400 responden, aunque el alta
-válida siga bloqueada. Sale 1 si el frontend o un servicio obligatorio no
-responde. Imprime `[BLOQUEADO]` en el 501 para que no se confunda con un
-éxito de negocio.
+Sale 0 cuando el proxy, las lecturas, el rechazo 400 y el historial completo
+hasta `DELIVERED` responden. Sale 1 si falta un servicio, el alta sigue en
+501 `NOT_IMPLEMENTED`, el inventario rechaza el pedido o el historial no
+completa el recorrido antes de `ACCEPTANCE_FLOW_TIMEOUT_SECONDS` (45 por
+defecto). Un catálogo vacío en `GET /api/products` se imprime como pendiente
+y no basta para aprobar.
 
-En esta revisión el motor de Docker no estaba aceptando conexiones, así que
-`health_platform.py` y `acceptance_flow.py` no se ejecutaron contra Compose.
-La interfaz sí se abrió en un servidor estático, en escritorio y en un ancho
-de 390 px. Esas capturas muestran el tablero cuando las APIs no responden;
-no son la evidencia del pedido entregado.
+Verificación local tras integrar `origin/develop` hasta `7501596`, el 8 de
+octubre de 2026: **180 pruebas aprobadas y 1 omitida** en Python 3.11.9. La
+omitida requiere `DELIVERY_TEST_DATABASE_URL`. Con Docker 29.7.2,
+`health_platform.py` salió 0 y la sonda de `dead-letter` también.
+`acceptance_flow.py` salió 1: el volumen PostgreSQL ya existente no tiene
+`order_number_seq` ni un `DEFAULT` en `orders.order_id`, así que el alta
+responde 503. No se borró el volumen.
+
+Existen dos capturas locales de una revisión anterior, descritas como interfaz
+sin API. No se generaron de nuevo ni acreditan un pedido entregado:
 
 - `docs/evidencias/interfaz-sin-api-escritorio.png`
 - `docs/evidencias/interfaz-sin-api-celular.png`
@@ -295,11 +318,16 @@ no son la evidencia del pedido entregado.
 `.gitignore` excluye `evidencias/`. Esas dos imágenes quedan en el disco local
 y hay que adjuntarlas al Pull Request. No entran en el commit.
 
-Los fallos que hay que abrir como Issues, sin cerrarlos con este documento:
+Los hallazgos y pasos reproducibles para registrar Issues están en
+[QA_RESULTADOS.md](QA_RESULTADOS.md). No se han creado Issues en esta revisión:
 
-1. `POST /api/orders` válido responde 501 y no publica `ORDER_CREATED`.
+1. El alta integrada persiste en código, pero el volumen PostgreSQL vivo
+   rechaza el `INSERT` porque `order_id` llega nulo. Hace falta una base
+   creada con el `init.sql` actual.
 2. `GET /api/products` responde una lista vacía.
 3. Faltan capturas del flujo completo con la plataforma en marcha.
+4. Falta ejecutar la aceptación contra Compose y guardar la salida del pedido
+   que llegue a `DELIVERED`.
 
 ## 13. Recuperación ante fallos
 
@@ -308,9 +336,9 @@ Los fallos que hay que abrir como Issues, sin cerrarlos con este documento:
 - `processed_events` guarda `event_id` y servicio para no aplicar dos veces la
   misma reserva, preparación o entrega.
 - Los consumidores leen desde `earliest` y confirman el offset a mano.
-- El historial de reparto puede volver a publicar una etapa después de una
-  caída. La prueba de negocio de ese recorrido sigue en los tests de cada
-  servicio; la aceptación de punta a punta espera a que el alta persista.
+- `delivery_events` permite volver a publicar una etapa después de una
+  caída. La aceptación de punta a punta espera el historial hasta
+  `DELIVERED` y falla si el recorrido se corta.
 
 ## 14. Solución de problemas
 
@@ -319,23 +347,31 @@ Los fallos que hay que abrir como Issues, sin cerrarlos con este documento:
 | Compose no conecta al motor | Docker Desktop abierto pero el motor Linux apagado | Arrancar el motor y repetir `docker compose ps`. No reiniciar la máquina sin confirmarlo. |
 | Falta `POSTGRES_PASSWORD` o `DATABASE_URL` | No existe `.env` | Copiar `.env.example` a `.env`. |
 | `kafka-init` no termina en 0 | Kafka aún no creó los seis topics | `docker compose logs kafka-init`. Recrear con `docker compose up -d --force-recreate` sin `-v`. |
-| Pedidos responde 503 | La base no coincide con `init.sql` o no acepta conexiones | Revisar logs de `orders`. No borrar el volumen como primer paso. |
-| El alta dice que la API no está implementada | El cuerpo es válido y el servicio responde 501 | Esperar el cierre de Alumno 1. El tablero ya envía el contrato. |
+| Pedidos responde 503 `DATABASE_UNAVAILABLE` al crear | El volumen es anterior a `init.sql`: `orders.order_id` no tiene `DEFAULT` y falta `order_number_seq` | Confirmarlo en los logs. Una base nueva exige `docker compose down -v` y borra los datos locales. No es el primer paso si hay pedidos que conservar. |
+| El alta dice que la API no está implementada | Se está ejecutando una imagen anterior del servicio | Reconstruir Orders con `docker compose up -d --build orders`. |
+| El alta devuelve `KAFKA_UNAVAILABLE` y un ID | Pedido guardado, publicación no confirmada | Consultar ese ID y los logs de Orders/Kafka antes de repetir el POST. |
 | El catálogo pide el identificador a mano | `/api/products` está vacío y el inventario no respondió | Revisar `GET /api/inventory`. Se puede escribir `PROD-001`. |
 | Tarjeta de servicio en error o sin API | El contenedor no responde en `/health` | `docker compose ps -a` y los logs de ese servicio. |
 | El navegador no ve inventario | Nginx viejo mandaba todo `/api/` a pedidos | Reconstruir el frontend: `docker compose up -d --build frontend`. |
 | Se perdieron los pedidos locales | Alguien ejecutó `docker compose down -v` | El volumen `postgres_data` se crea de nuevo con el `init.sql` actual. |
 
-## 15. Aportaciones de esta revisión
+## 15. Aportaciones y alcance de esta revisión
 
-Rama de trabajo: `feat/api-front-connection`, en tres commits separados.
+Esta revisión es documental y no genera commits, pushes ni Pull Requests.
+Los nombres de integrantes, institución, profesor y enlaces de entrega deben
+completarse con los datos reales del equipo.
 
 | Responsabilidad | Qué quedó listo |
 |---|---|
-| Alumno 5 | Nginx resuelve por nombre pedidos, inventario, almacén y reparto. La salud de los cuatro servicios sale por el mismo origen. El frontend espera a que esos contenedores existan. |
-| Conexión con el front | Formulario, tablero con filtro, seguimiento, inventario por almacén y salud. El 501, el 404 y la caída de red se explican sin inventar pedidos. |
-| Alumno 7 | Este manual, la matriz, los defectos para Issues y `scripts/acceptance_flow.py`. |
+| Alumno 5 | Funciones compartidas documentadas, contrato de eventos descrito, salud exigida en los siete servicios de larga duración y sonda `infrastructure/verify_runtime.py` para `dead-letter`. |
+| Alumno 7 | Manual, guía técnica, matriz de QA y aceptación que espera `DELIVERED`. |
 
-Siguen a cargo de otros módulos el alta persistente, la publicación de
-`ORDER_CREATED`, el catálogo en `/api/products` y el recorrido completo hasta
-`DELIVERED`.
+Los servicios de los alumnos 1–4, el frontend del alumno 6 y las secciones SQL
+identificadas como aportaciones ajenas se conservan sin cambios.
+
+El alta persistente y `ORDER_CREATED` llegaron desde `origin/develop` hasta
+`7501596`, junto con la corrección de UUID estables de Warehouse. La fusión está
+pendiente del commit del usuario. La salud de la plataforma y el desvío a
+`dead-letter` ya se ejecutaron. El catálogo en `/api/products` sigue vacío y
+el recorrido hasta `DELIVERED` no pudo demostrarse: el volumen PostgreSQL
+vivo es anterior al `DEFAULT` de `orders.order_id`.

@@ -1,12 +1,12 @@
 """Prueba de aceptación contra el frontend ya levantado.
 
-Sale con 0 cuando el proxy y las lecturas responden y el alta queda creada
-o bloqueada en 501. Sale con 1 si un chequeo obligatorio falla. Un 501 no
-escribe pedidos.
+Sale con 0 solo si las lecturas responden, el alta devuelve un pedido y el
+historial recorre hasta DELIVERED. Un 501 o un recorrido a medias sale con 1.
 
 Ejemplo:
     python scripts/acceptance_flow.py
     $env:ACCEPTANCE_BASE_URL = "http://localhost:8080"
+    $env:ACCEPTANCE_FLOW_TIMEOUT_SECONDS = "45"
 """
 
 from __future__ import annotations
@@ -14,8 +14,21 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+
+EXPECTED_FLOW = (
+    "RECEIVED",
+    "INVENTORY_RESERVED",
+    "PREPARING",
+    "READY_FOR_DELIVERY",
+    "DRIVER_ASSIGNED",
+    "IN_TRANSIT",
+    "NEAR_DESTINATION",
+    "DELIVERED",
+)
 
 
 def classify_create(status: int, body: object) -> str:
@@ -25,6 +38,32 @@ def classify_create(status: int, body: object) -> str:
     if status in (200, 201) and isinstance(body, dict) and isinstance(body.get("order_id"), str):
         return "created"
     return "failed"
+
+
+def flow_statuses(history: object) -> list[str] | None:
+    """Extrae los estados del historial. None si el cuerpo no tiene esa forma."""
+    if not isinstance(history, list):
+        return None
+    statuses = []
+    for step in history:
+        if not isinstance(step, dict) or not isinstance(step.get("status"), str) or not step["status"]:
+            return None
+        statuses.append(step["status"])
+    return statuses
+
+
+def classify_flow(statuses: list[str] | None) -> str:
+    """Compara el historial con el recorrido oficial, sin saltos ni rechazos."""
+    if statuses is None:
+        return "invalid"
+    expected = list(EXPECTED_FLOW)
+    if statuses == expected:
+        return "complete"
+    if statuses == expected[: len(statuses)]:
+        return "in_progress"
+    if "INVENTORY_REJECTED" in statuses:
+        return "rejected"
+    return "diverged"
 
 
 def _decode(raw: str) -> object:
@@ -99,24 +138,32 @@ def main() -> int:
     status, body = request_json("POST", f"{base}/api/orders", payload)
     outcome = classify_create(status, body)
     if outcome == "blocked":
-        print("[BLOQUEADO] alta: POST /api/orders sigue en 501 NOT_IMPLEMENTED")
-    elif outcome == "created":
+        check("alta", False, "HTTP 501 NOT_IMPLEMENTED")
+    elif outcome != "created":
+        check("alta", False, f"HTTP {status} cuerpo={body}")
+    else:
         order_id = body["order_id"]
         print(f"[OK] alta: pedido {order_id}")
-        status, detail_body = request_json("GET", f"{base}/api/orders/{order_id}")
-        history = detail_body.get("history") if isinstance(detail_body, dict) else None
-        check(
-            "seguimiento",
-            status == 200 and isinstance(history, list) and any(step.get("status") == "RECEIVED" for step in history if isinstance(step, dict)),
-            f"HTTP {status}",
-        )
-    else:
-        check("alta", False, f"HTTP {status} cuerpo={body}")
+        timeout = float(os.environ.get("ACCEPTANCE_FLOW_TIMEOUT_SECONDS", "45"))
+        deadline = time.monotonic() + timeout
+        while True:
+            status, detail_body = request_json("GET", f"{base}/api/orders/{order_id}")
+            history = detail_body.get("history") if isinstance(detail_body, dict) else None
+            statuses = flow_statuses(history)
+            progress = classify_flow(statuses) if status == 200 else "invalid"
+            seen = ",".join(statuses or [])
+            if progress == "complete":
+                check("seguimiento", True, order_id)
+                break
+            if progress != "in_progress" or time.monotonic() >= deadline:
+                check("seguimiento", False, f"HTTP {status} historial={seen or progress}")
+                break
+            time.sleep(2)
 
     if failures:
         print("Aceptacion incompleta: " + ", ".join(failures))
         return 1
-    print("Aceptacion terminada. El alta bloqueada no cuenta como flujo de negocio cerrado.")
+    print("Aceptacion terminada: el pedido llego a DELIVERED.")
     return 0
 
 

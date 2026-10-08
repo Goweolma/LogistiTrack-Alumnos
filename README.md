@@ -1,9 +1,23 @@
 # LogistiTrack — Base para alumnos
 
-Proyecto colaborativo de Sistemas Distribuidos. Esta base **arranca**, expone la
-interfaz y los endpoints de salud, pero el flujo logístico todavía no está
-implementado. Los siete integrantes deben completarlo mediante ramas y Pull
-Requests.
+Proyecto colaborativo de Sistemas Distribuidos con cuatro microservicios,
+Kafka, PostgreSQL y un tablero web. Hay consultas de pedidos, inventario y
+consumidores de reserva, preparación y reparto implementados. El alta de
+pedidos persiste el pedido y publica `ORDER_CREATED`; devuelve **201** al
+completar ambas operaciones. Falta verificar el recorrido completo con Docker.
+
+## Documentación
+
+- [Manual técnico y de usuario](docs/MANUAL.md): instalación Windows/Linux,
+  configuración, operación, APIs, pruebas y solución de problemas.
+- [Guía del código](docs/CODIGO_TECNICO.md): módulos, funciones compartidas,
+  persistencia, consumidores y límites de recuperación.
+- [Contrato de eventos y payloads](contracts/events.md).
+- [Resultados de QA y pendientes](docs/QA_RESULTADOS.md).
+- [Salud de plataforma](docs/INFRA_HEALTH.md) y [operación de Kafka](docs/INFRA_KAFKA.md).
+
+La revisión documental de los alumnos 5 y 7 conserva el código de los demás
+integrantes. Los resultados locales no sustituyen la validación con Compose.
 
 ## Lo que ya está preparado
 
