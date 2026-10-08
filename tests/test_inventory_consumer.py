@@ -227,7 +227,7 @@ def test_duplicate_event_does_not_reserve_twice_and_republishes_same_result(db, 
     second = inventory.process_order_event(event, producer=object())
 
     assert (first, second) == ("reserved", "duplicate")
-    assert db.stock[("PROD-001", "NORTE")] == 1
+    assert db.stock[("PROD-001", "SUR")] == 4
     assert len(db.reservations) == 1
     assert [topic for topic, _ in published] == ["inventory", "order-status", "inventory", "order-status"]
     assert published[2][1] == published[0][1]
@@ -287,12 +287,55 @@ def test_invalid_payload_raises_value_error_before_touching_database(db, publish
     assert published == []
 
 
-def test_choose_warehouse_prefers_norte_when_both_can_fulfil():
-    stock = {("PROD-001", "NORTE"): 3, ("PROD-001", "SUR"): 9}
+@pytest.mark.parametrize(
+    ("stock", "quantities", "expected"),
+    [
+        # Ambos surten el pedido: gana el que tiene más existencias.
+        ({("PROD-001", "NORTE"): 3, ("PROD-001", "SUR"): 9}, {"PROD-001": 3}, "SUR"),
+        ({("PROD-001", "NORTE"): 9, ("PROD-001", "SUR"): 3}, {"PROD-001": 3}, "NORTE"),
+        # Empate: se conserva NORTE.
+        ({("PROD-001", "NORTE"): 5, ("PROD-001", "SUR"): 5}, {"PROD-001": 2}, "NORTE"),
+        # Varios productos: se suma la disponibilidad de todos los productos pedidos.
+        (
+            {
+                ("PROD-001", "NORTE"): 5,
+                ("PROD-002", "NORTE"): 1,
+                ("PROD-001", "SUR"): 2,
+                ("PROD-002", "SUR"): 2,
+            },
+            {"PROD-001": 1, "PROD-002": 1},
+            "NORTE",
+        ),
+        # Más existencias no basta: el almacén debe surtir el pedido completo.
+        (
+            {
+                ("PROD-001", "NORTE"): 100,
+                ("PROD-002", "NORTE"): 0,
+                ("PROD-001", "SUR"): 1,
+                ("PROD-002", "SUR"): 1,
+            },
+            {"PROD-001": 1, "PROD-002": 1},
+            "SUR",
+        ),
+        # Solo uno alcanza.
+        ({("PROD-001", "NORTE"): 3, ("PROD-001", "SUR"): 9}, {"PROD-001": 4}, "SUR"),
+        # Ninguno alcanza.
+        ({("PROD-001", "NORTE"): 3, ("PROD-001", "SUR"): 9}, {"PROD-001": 10}, None),
+    ],
+)
+def test_choose_warehouse_picks_the_one_with_more_availability(stock, quantities, expected):
+    assert inventory.choose_warehouse(stock, quantities) == expected
 
-    assert inventory.choose_warehouse(stock, {"PROD-001": 3}) == "NORTE"
-    assert inventory.choose_warehouse(stock, {"PROD-001": 4}) == "SUR"
-    assert inventory.choose_warehouse(stock, {"PROD-001": 10}) is None
+
+def test_reserves_in_the_warehouse_with_more_availability(db, published):
+    # PROD-001: NORTE tiene 2 y SUR tiene 5; ambos surten 1 unidad, pero SUR tiene más.
+    result = inventory.process_order_event(order_created(("PROD-001", 1)), producer=object())
+
+    assert result == "reserved"
+    assert published[0][1]["payload"]["warehouse"] == "SUR"
+    assert db.stock[("PROD-001", "SUR")] == 4
+    assert db.stock[("PROD-001", "NORTE")] == 2
+    assert db.reservations[next(iter(db.reservations))]["warehouse"] == "SUR"
 
 
 class FakeMessage:
@@ -515,7 +558,7 @@ def test_real_publish_failure_skips_offset_commit_and_retry_republishes_stored_r
 
     stored = next(iter(db.reservations.values()))["result_event"]
     assert working_producer.messages == [("inventory", stored), ("order-status", stored)]
-    assert db.stock[("PROD-001", "NORTE")] == 1
+    assert db.stock[("PROD-001", "SUR")] == 4
     assert db.history == [("PED-000001", "INVENTORY_RESERVED")]
 
 
@@ -527,7 +570,7 @@ def test_second_order_created_with_new_event_id_does_not_reserve_again(db, publi
     with pytest.raises(ValueError, match="INVALID_ORDER_STATE"):
         inventory.process_order_event(second, producer=object())
 
-    assert db.stock[("PROD-001", "NORTE")] == 1
+    assert db.stock[("PROD-001", "SUR")] == 4
     assert db.orders["PED-000001"] == "INVENTORY_RESERVED"
     assert db.history == [("PED-000001", "INVENTORY_RESERVED")]
     assert db.processed == {(first["event_id"], "inventory")}

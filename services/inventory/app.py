@@ -105,11 +105,16 @@ def requested_quantities(payload: dict[str, Any]) -> dict[str, int]:
 
 
 def choose_warehouse(stock: dict[tuple[str, str], int], quantities: dict[str, int]) -> str | None:
-    """Primer almacén, en orden NORTE y SUR, que puede surtir el pedido completo."""
-    for warehouse in WAREHOUSES:
-        if all(stock.get((pid, warehouse), 0) >= quantity for pid, quantity in quantities.items()):
-            return warehouse
-    return None
+    """Almacén con mayor disponibilidad de los productos pedidos entre los que surten el pedido completo."""
+    candidates = [
+        warehouse
+        for warehouse in WAREHOUSES
+        if all(stock.get((pid, warehouse), 0) >= quantity for pid, quantity in quantities.items())
+    ]
+    if not candidates:
+        return None
+    # max() conserva el primero en caso de empate, por lo que NORTE gana si ambos tienen lo mismo.
+    return max(candidates, key=lambda warehouse: sum(stock.get((pid, warehouse), 0) for pid in quantities))
 
 
 def reserve_inventory(event: dict[str, Any], quantities: dict[str, int]) -> tuple[str, dict | None]:
