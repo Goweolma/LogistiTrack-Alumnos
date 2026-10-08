@@ -281,6 +281,8 @@ def test_create_order_returns_201_and_persists(monkeypatch):
                     "PROD-002": (50,),
                 }
                 self.current = prices.get(params[0])
+            elif "INSERT INTO orders" in query and "RETURNING order_id" in query:
+                self.current = ("PED-000001",)
 
         def fetchone(self):
             return self.current
@@ -291,11 +293,6 @@ def test_create_order_returns_201_and_persists(monkeypatch):
         orders,
         "get_connection",
         lambda: FakeConnection(cursor),
-    )
-    monkeypatch.setattr(
-        orders,
-        "generate_order_id",
-        lambda: "PED-000001",
     )
 
     client = orders.app.test_client()
@@ -322,12 +319,13 @@ def test_create_order_returns_201_and_persists(monkeypatch):
     assert any("INSERT INTO orders" in query for query in queries)
     assert any("INSERT INTO order_items" in query for query in queries)
     assert any("INSERT INTO order_history" in query for query in queries)
+    assert any("RETURNING order_id" in query for query in queries)
 
     order_insert = next(
         params for query, params in cursor.queries
         if "INSERT INTO orders" in query
     )
-    assert order_insert[2] == "Av. Universidad 100"
+    assert order_insert[1] == "Av. Universidad 100"
 
 
 def test_create_order_rejects_unknown_product(monkeypatch):

@@ -2,17 +2,13 @@
 
 import logging
 import os
-from secrets import randbelow
+
 
 from flask import Flask, jsonify, request
 from common.database import get_connection
 
 
 app = Flask(__name__)
-
-
-def generate_order_id():
-    return f"PED-{randbelow(1_000_000):06d}"
 
 
 @app.get("/health")
@@ -214,7 +210,6 @@ def create_order():
         for item in payload["items"]
     ]
 
-    order_id = generate_order_id()
 
     try:
         with get_connection() as connection:
@@ -241,13 +236,14 @@ def create_order():
 
                 cursor.execute(
                     """
-                    INSERT INTO orders (
-                        order_id, total, delivery_address, status
-                    )
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO orders (total, delivery_address, status)
+                    VALUES (%s, %s, 'RECEIVED')
+                    RETURNING order_id
                     """,
-                    (order_id, total, delivery_address, "RECEIVED"),
+                    (total, delivery_address),
                 )
+
+                order_id = cursor.fetchone()[0]
 
                 for item in items:
                     cursor.execute(
