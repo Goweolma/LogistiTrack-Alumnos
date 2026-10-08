@@ -33,8 +33,33 @@ def platform_health():
 
 @app.get("/api/products")
 def list_products():
-    # TODO(ALUMNO-1/2): consultar PostgreSQL; no dejar datos fijos en el código.
-    return jsonify([])
+    try:
+        with get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT product_id, name, product_description, price
+                    FROM products
+                    ORDER BY product_id
+                    """
+                )
+                rows = cursor.fetchall()
+
+    except Exception:
+        logging.exception("Error al consultar el catálogo de productos")
+        return jsonify({"error": "DATABASE_UNAVAILABLE"}), 503
+
+    products = [
+        {
+            "product_id": product_id,
+            "name": name,
+            "description": description,
+            "price": float(price),
+        }
+        for product_id, name, description, price in rows
+    ]
+
+    return jsonify(products)
 
 
 @app.get("/api/orders")

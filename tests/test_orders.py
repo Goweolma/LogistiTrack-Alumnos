@@ -516,3 +516,74 @@ def test_create_order_rolls_back_when_persistence_fails(monkeypatch):
         "error": "DATABASE_UNAVAILABLE"
     }
     assert connection.rolled_back is True
+
+
+def test_list_products_returns_real_catalog(monkeypatch):
+    cursor = FakeCursor(
+        orders_list=[
+            (
+                "PROD-001",
+                "Laptop empresarial",
+                "Laptop de 14 pulgadas para uso corporativo",
+                18999.00,
+            ),
+            (
+                "PROD-002",
+                "Monitor 24 pulgadas",
+                "Monitor Full HD de 24 pulgadas",
+                4299.00,
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    client = orders.app.test_client()
+    response = client.get("/api/products")
+
+    assert response.status_code == 200
+
+    data = response.get_json()
+
+    assert data == [
+        {
+            "product_id": "PROD-001",
+            "name": "Laptop empresarial",
+            "description": "Laptop de 14 pulgadas para uso corporativo",
+            "price": 18999.0,
+        },
+        {
+            "product_id": "PROD-002",
+            "name": "Monitor 24 pulgadas",
+            "description": "Monitor Full HD de 24 pulgadas",
+            "price": 4299.0,
+        },
+    ]
+
+    assert any(
+        "FROM products" in query
+        for query in cursor.queries
+    )
+
+
+def test_list_products_returns_503_when_database_fails(monkeypatch):
+    def broken_connection():
+        raise RuntimeError("Database unavailable")
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        broken_connection,
+    )
+
+    client = orders.app.test_client()
+    response = client.get("/api/products")
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "error": "DATABASE_UNAVAILABLE"
+    }
