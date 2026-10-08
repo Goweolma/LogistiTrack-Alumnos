@@ -4,6 +4,7 @@ import pytest
 import services.orders.app as orders
 
 
+
 NOW = datetime(2026, 10, 5, 12, 0, tzinfo=timezone.utc)
 
 
@@ -294,6 +295,26 @@ def test_create_order_returns_201_and_persists(monkeypatch):
         "get_connection",
         lambda: FakeConnection(cursor),
     )
+    published = {}
+    fake_producer = object()
+
+
+    monkeypatch.setattr(
+        orders,
+        "create_producer",
+        lambda: fake_producer,
+    )
+
+    def fake_publish(producer, topic, event):
+        published["producer"] = producer
+        published["topic"] = topic
+        published["event"] = event
+
+    monkeypatch.setattr(
+        orders,
+        "publish",
+        fake_publish,
+    )
 
     client = orders.app.test_client()
     response = client.post(
@@ -314,6 +335,22 @@ def test_create_order_returns_201_and_persists(monkeypatch):
     assert data["status"] == "RECEIVED"
     assert data["total"] == 250.0
     assert data["items"][0]["product_id"] == "PROD-001"
+
+
+    assert published["producer"] is fake_producer
+    assert published["topic"] == "orders"
+
+    event = published["event"]
+
+    assert event["event_type"] == "ORDER_CREATED"
+    assert event["order_id"] == "PED-000001"
+    assert event["source"] == "orders"
+    assert event["payload"] == {
+        "items": [
+            {"product_id": "PROD-001", "quantity": 2},
+            {"product_id": "PROD-002", "quantity": 1},
+        ]
+    }
 
     queries = [query for query, _ in cursor.queries]
     assert any("INSERT INTO orders" in query for query in queries)
@@ -348,3 +385,134 @@ def test_create_order_rejects_unknown_product(monkeypatch):
 
     assert response.status_code == 400
     assert response.get_json()["detail"] == "PRODUCT_NOT_FOUND"
+
+def test_create_order_returns_503_when_kafka_fails(monkeypatch):
+    class CreateCursor:
+        def __init__(self):
+            self.current = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def execute(self, query, params=None):
+            query = " ".join(query.split())
+
+            if "SELECT price FROM products" in query:
+                self.current = (100,)
+
+            elif "INSERT INTO orders" in query and "RETURNING order_id" in query:
+                self.current = ("PED-000001",)
+
+        def fetchone(self):
+            return self.current
+
+    cursor = CreateCursor()
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    monkeypatch.setattr(
+        orders,
+        "create_producer",
+        lambda: object(),
+    )
+
+    def broken_publish(producer, topic, event):
+        raise RuntimeError("Kafka unavailable")
+
+    monkeypatch.setattr(
+        orders,
+        "publish",
+        broken_publish,
+    )
+
+    client = orders.app.test_client()
+    response = client.post(
+        "/api/orders",
+        json={
+            "delivery_address": "Casa",
+            "items": [
+                {"product_id": "PROD-001", "quantity": 1},
+            ],
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "error": "KAFKA_UNAVAILABLE",
+        "order_id": "PED-000001",
+    }
+
+def test_create_order_rolls_back_when_persistence_fails(monkeypatch):
+    class FailingCursor:
+        def __init__(self):
+            self.current = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def execute(self, query, params=None):
+            query = " ".join(query.split())
+
+            if "SELECT price FROM products" in query:
+                self.current = (100,)
+
+            elif "INSERT INTO orders" in query and "RETURNING order_id" in query:
+                self.current = ("PED-000001",)
+
+            elif "INSERT INTO order_items" in query:
+                raise RuntimeError("Persistence failed")
+
+        def fetchone(self):
+            return self.current
+
+    class RollbackConnection:
+        def __init__(self, cursor):
+            self.fake_cursor = cursor
+            self.rolled_back = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            if exc_type is not None:
+                self.rolled_back = True
+            return False
+
+        def cursor(self):
+            return self.fake_cursor
+
+    cursor = FailingCursor()
+    connection = RollbackConnection(cursor)
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: connection,
+    )
+
+    client = orders.app.test_client()
+    response = client.post(
+        "/api/orders",
+        json={
+            "delivery_address": "Casa",
+            "items": [
+                {"product_id": "PROD-001", "quantity": 1},
+            ],
+        },
+    )
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "error": "DATABASE_UNAVAILABLE"
+    }
+    assert connection.rolled_back is True

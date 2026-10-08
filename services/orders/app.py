@@ -6,10 +6,14 @@ import os
 
 from flask import Flask, jsonify, request
 from common.database import get_connection
+from common.events import build_event
+from common.kafka_client import create_producer, publish
 
 
 app = Flask(__name__)
 
+SERVICE_NAME = "orders"
+ORDERS_TOPIC = "orders"
 
 @app.get("/health")
 def health():
@@ -271,6 +275,25 @@ def create_order():
     except Exception:
         logging.exception("Error al crear el pedido")
         return jsonify({"error": "DATABASE_UNAVAILABLE"}), 503
+    try:
+        event = build_event(
+                "ORDER_CREATED",
+                order_id,
+                SERVICE_NAME,
+                {"items": items},
+        )
+
+        producer = create_producer()
+        publish(producer, ORDERS_TOPIC, event)
+
+    except Exception:
+        logging.exception("Error al publicar ORDER_CREATED")
+        return jsonify(
+            {
+                "error": "KAFKA_UNAVAILABLE",
+                "order_id": order_id,
+            }
+        ), 503
 
     return jsonify(
         {
