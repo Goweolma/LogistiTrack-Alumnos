@@ -1,4 +1,4 @@
-"""Contrato mínimo para eventos. Completar sin romper el esquema JSON."""
+"""Construcción y validación del sobre de contracts/event.schema.json."""
 
 from datetime import datetime, timezone
 import re
@@ -7,7 +7,11 @@ from uuid import uuid4
 
 
 def build_event(event_type: str, order_id: str, source: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Crea el sobre estándar que compartirán todos los servicios."""
+    """Devuelve un sobre versión 1 con UUID nuevo y fecha UTC con zona horaria.
+
+    No valida los argumentos ni copia payload: conserva el diccionario recibido.
+    El emisor debe validar el resultado antes de publicarlo.
+    """
     return {
         "event_id": str(uuid4()),
         "event_type": event_type,
@@ -20,7 +24,13 @@ def build_event(event_type: str, order_id: str, source: str, payload: dict[str, 
 
 
 def validate_event(event: dict[str, Any]) -> None:
-    """Valida un evento contra el contrato compartido del sistema."""
+    """Comprueba campos y tipos del sobre; retorna None o lanza ValueError.
+
+    Rechaza campos adicionales, UUID sin guiones, fechas sin zona y versiones
+    distintas del entero 1 (incluido True). Solo comprueba que payload sea un
+    diccionario: cada servicio valida su contenido de negocio. No comprueba
+    existencia del pedido, nombres oficiales de eventos ni serialización JSON.
+    """
     if not isinstance(event, dict):
         raise ValueError("El evento debe ser un objeto JSON")
 

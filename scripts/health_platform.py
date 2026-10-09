@@ -40,7 +40,8 @@ HTTP_HEALTHCHECKS = {
     "warehouse": "http://localhost:5003/health",
     "delivery": "http://localhost:5004/health",
 }
-HEALTHY_SERVICES = {"postgres", "kafka", "orders"}
+# kafka-init es una tarea finita: se comprueba su código de salida, no healthy.
+HEALTHY_SERVICES = EXPECTED_SERVICES - {"kafka-init"}
 INFRASTRUCTURE_SERVICES = {"postgres", "kafka", "kafka-init"}
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -129,7 +130,16 @@ def check_containers() -> bool:
     except ValueError as exc:
         return report(False, f"INFRAESTRUCTURA: salida JSON inválida de docker compose ps: {exc}")
 
-    by_service = {record.get("Service"): record for record in records}
+    by_service = {}
+    for record in records:
+        labels = record.get("Labels", {})
+        if isinstance(labels, str):
+            labels = dict(item.split("=", 1) for item in labels.split(",") if "=" in item)
+        if isinstance(labels, dict) and str(labels.get("com.docker.compose.oneoff", "")).lower() == "true":
+            # compose run crea tareas auxiliares con el mismo nombre de servicio.
+            # No deben sustituir al contenedor administrado por compose up.
+            continue
+        by_service[record.get("Service")] = record
     all_ok = True
     for service in sorted(EXPECTED_SERVICES):
         if service not in by_service:

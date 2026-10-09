@@ -1,4 +1,8 @@
-"""Ayudantes mínimos de Kafka que el alumno de infraestructura ampliará."""
+"""Clientes Kafka, publicación confirmada y derivación de eventos inválidos.
+
+La configuración usa KAFKA_BOOTSTRAP_SERVERS o kafka:9092. Los consumidores
+administran sus offsets y cierre; este módulo no garantiza entrega única.
+"""
 
 import json
 import os
@@ -60,7 +64,13 @@ def publish_confirmed(
     key: bytes | None = None,
     timeout: float = 5,
 ) -> None:
-    """Publica y espera la confirmación del broker. Lo usan publish() y dead-letter."""
+    """Serializa a JSON UTF-8 y espera callback y flush, hasta timeout segundos.
+
+    key se pasa al productor cuando está presente. No valida el sobre ni hace
+    reintentos. Lanza PublishError si quedan mensajes, falta confirmación o el
+    callback informa un error; propaga errores de serialización y del cliente.
+    Ante un fallo, el consumidor no debe confirmar el offset de entrada.
+    """
     results = []
     payload = json.dumps(event).encode("utf-8")
     callback = lambda error, message: results.append(error)
@@ -74,10 +84,16 @@ def publish_confirmed(
 
 
 def create_producer() -> Producer:
+    """Crea un productor; su construcción no demuestra conexión con el broker."""
     return Producer({"bootstrap.servers": os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")})
 
 
 def publish(producer: Producer, topic: str, event: dict) -> None:
+    """Valida y publica, o desvía a dead-letter si falla la validación.
+
+    Devuelve None también al desviar el mensaje: no implica publicación en el
+    topic solicitado. Propaga fallos de entrega, incluso los de dead-letter.
+    """
     try:
         validate_event(event)
     except (TypeError, ValueError) as exc:
@@ -93,7 +109,12 @@ def publish_dead_letter(
     reason: str,
     source: str = "infrastructure",
 ) -> None:
-    """Publica un evento inválido sin volver a intentar el topic original."""
+    """Envía PROCESSING_FAILED con payload.error y payload.original_event.
+
+    Conserva order_id válido o usa PED-000000 como identificador de diagnóstico.
+    Copia el original mediante JSON (objetos no serializables pasan a texto),
+    valida el nuevo sobre y espera confirmación. No reintenta el topic original.
+    """
     order_id = event.get("order_id") if isinstance(event, dict) else None
     if not isinstance(order_id, str) or not re.fullmatch(r"PED-[0-9]{6}", order_id):
         order_id = "PED-000000"
@@ -110,6 +131,11 @@ def publish_dead_letter(
 
 
 def create_consumer(group_id: str, topics: list[str]) -> Consumer:
+    """Crea y suscribe un consumidor del grupo con commit automático desactivado.
+
+    earliest aplica cuando no hay offset utilizable para el grupo; no reinicia
+    offsets existentes. El llamador hace poll, commit tras procesar y close.
+    """
     consumer = Consumer(
         {
             "bootstrap.servers": os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092"),

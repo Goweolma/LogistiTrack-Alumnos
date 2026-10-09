@@ -58,6 +58,24 @@ def test_healthy_platform_containers(monkeypatch):
     assert health.check_containers()
 
 
+@pytest.mark.parametrize("labels", [
+    "com.docker.compose.oneoff=True,com.docker.compose.service=kafka-init",
+    {"com.docker.compose.oneoff": "True"},
+])
+def test_auxiliary_run_does_not_replace_completed_init(monkeypatch, labels):
+    records = healthy_records() + [{"Service": "kafka-init", "State": "running", "Labels": labels}]
+    mock_docker(monkeypatch, records=records)
+    assert health.check_containers()
+
+
+def test_auxiliary_run_does_not_hide_missing_service(monkeypatch):
+    records = [record for record in healthy_records() if record["Service"] != "kafka-init"]
+    records.append({"Service": "kafka-init", "State": "exited", "ExitCode": 0,
+                    "Labels": "com.docker.compose.oneoff=True"})
+    mock_docker(monkeypatch, records=records)
+    assert not health.check_containers()
+
+
 @pytest.mark.parametrize("changes", [
     {"Type": "bind"}, {"Destination": "/docker-entrypoint-initdb.d/01-init.sql"},
     {"RW": False}, {"Name": ""},
@@ -80,6 +98,15 @@ def test_unrelated_named_volume_fails(monkeypatch):
 def test_container_failure_is_not_hidden(monkeypatch, service, changes):
     records = healthy_records()
     next(record for record in records if record["Service"] == service).update(changes)
+    mock_docker(monkeypatch, records=records)
+    assert not health.check_containers()
+
+
+@pytest.mark.parametrize("service", ["inventory", "warehouse", "delivery", "frontend"])
+@pytest.mark.parametrize("status", ["unhealthy", "starting", ""])
+def test_running_service_requires_successful_docker_healthcheck(monkeypatch, service, status):
+    records = healthy_records()
+    next(record for record in records if record["Service"] == service)["Health"] = status
     mock_docker(monkeypatch, records=records)
     assert not health.check_containers()
 
