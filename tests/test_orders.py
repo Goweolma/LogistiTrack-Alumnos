@@ -587,3 +587,79 @@ def test_list_products_returns_503_when_database_fails(monkeypatch):
     assert response.get_json() == {
         "error": "DATABASE_UNAVAILABLE"
     }
+
+def test_cancel_order_when_status_is_received(monkeypatch):
+    cursor = FakeCursor(order=("RECEIVED",))
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    client = orders.app.test_client()
+    response = client.patch("/api/orders/PED-000001/cancel")
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "order_id": "PED-000001",
+        "status": "CANCELLED",
+    }
+
+    assert any(
+        "UPDATE orders" in query
+        and "SET status = 'CANCELLED'" in query
+        for query in cursor.queries
+    )
+
+    assert any(
+        "INSERT INTO order_history" in query
+        for query in cursor.queries
+    )
+
+def test_cancel_order_returns_404_when_order_does_not_exist(monkeypatch):
+    cursor = FakeCursor(order=None)
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    client = orders.app.test_client()
+    response = client.patch("/api/orders/PED-999999/cancel")
+
+    assert response.status_code == 404
+    assert response.get_json() == {
+        "error": "ORDER_NOT_FOUND",
+        "order_id": "PED-999999",
+    }
+
+def test_cancel_order_rejects_when_status_is_not_received(monkeypatch):
+    cursor = FakeCursor(order=("PREPARING",))
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    client = orders.app.test_client()
+    response = client.patch("/api/orders/PED-000001/cancel")
+
+    assert response.status_code == 409
+    assert response.get_json() == {
+        "error": "ORDER_CANNOT_BE_CANCELLED",
+        "order_id": "PED-000001",
+        "status": "PREPARING",
+    }
+
+    assert not any(
+        "UPDATE orders" in query
+        for query in cursor.queries
+    )
+
+    assert not any(
+        "INSERT INTO order_history" in query
+        for query in cursor.queries
+    )
