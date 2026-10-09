@@ -76,3 +76,5 @@ def test_long_running_services_define_a_local_healthcheck():
     frontend = COMPOSE.split("\n  frontend:", 1)[1].split("\nvolumes:", 1)[0]
     assert frontend.count("healthcheck:") == 1
     assert "127.0.0.1/frontend-health" in frontend
+    assert "condition: service_healthy" in frontend
+    assert frontend.count("condition: service_started") == 3

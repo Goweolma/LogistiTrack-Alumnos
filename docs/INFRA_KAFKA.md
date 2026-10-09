@@ -107,8 +107,8 @@ contenedores; no requiere eliminar `postgres_data`.
 
 | Archivo | Problema y efecto | Cambio del responsable |
 |---|---|---|
-| `services/orders/app.py` | `POST /api/orders` devuelve 501 para pedidos válidos; no inicia el flujo. | Alumno 1: persistir pedido/historial y publicar `ORDER_CREATED`. |
-| `services/orders/app.py` | `/api/products` devuelve una lista vacía fija. | Alumnos 1/2: integrar el catálogo persistido. |
+| `services/orders/app.py` | `POST /api/orders` persiste y publica desde `7501596`. Responde 201, o 503 si falla la base o Kafka. | Resuelto por el alumno 1. Infraestructura no modifica esa API. |
+| `services/orders/app.py` | `GET /api/products` lee `products` desde `4e707b9`. No incluye existencias. | Resuelto por el PR #48. Infraestructura no modifica esa API. |
 | `services/inventory/app.py` y `services/delivery/app.py` | Cada uno repite `produce` y `flush`. El helper común ya confirma, también en dead-letter. | Alumno de inventario y alumno de reparto: aplicar el comentario de `common/kafka_client.py`. Conservar `PublishError`, `RetryLater`, la clave `order_id` y el timeout de 10 s. |
 | `services/inventory/requirements.txt` | Pines distintos al resto: Flask 3.1.3, psycopg 3.3.6, confluent-kafka 2.15.1. | Alumno de inventario: igualar a Flask 3.1.0, psycopg 3.2.3 y confluent-kafka 2.6.1. |
 

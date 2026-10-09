@@ -162,6 +162,12 @@ services:
     depends_on:
       orders:
         condition: service_healthy
+      inventory:
+        condition: service_started
+      warehouse:
+        condition: service_started
+      delivery:
+        condition: service_started
     ports: ["8080:80"]
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/frontend-health"]
