@@ -147,8 +147,13 @@ def reserve_inventory(event: dict[str, Any], quantities: dict[str, int]) -> tupl
             if row is None:
                 raise ValueError(f"ORDER_NOT_FOUND: {event['order_id']} no existe en orders")
 
-            # Otro ORDER_CREATED (distinto event_id) no debe reservar de nuevo ni regresar el estado del pedido.
+            # Un pedido cancelado antes de que Inventory lo atendiera es un caso esperado: no se reserva,
+            # no se escribe historial ni se publica nada. Solo queda en processed_events y se confirma el offset.
             current_status = row[0]
+            if current_status == "CANCELLED":
+                return "cancelled", None
+
+            # Otro ORDER_CREATED (distinto event_id) no debe reservar de nuevo ni regresar el estado del pedido.
             if current_status != "RECEIVED":
                 raise ValueError(f"INVALID_ORDER_STATE: se esperaba RECEIVED, pero está en {current_status}")
 
