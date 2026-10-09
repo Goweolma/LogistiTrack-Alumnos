@@ -38,7 +38,7 @@ def test_inventory_reservations_keeps_one_result_per_event():
 def test_orders_has_optional_delivery_columns():
     block = _table_block("orders")
     assert re.search(r"driver_id VARCHAR\(20\)\s*,", block)
-    assert re.search(r"vehicle_id VARCHAR\(20\)\s*$", block)
+    assert re.search(r"vehicle_id VARCHAR\(20\)\s*,", block)
 
 
 def test_order_history_has_optional_event_columns_for_delivery():
