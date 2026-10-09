@@ -1,7 +1,7 @@
 const app = document.querySelector('#app');
 const nav = document.querySelector('#navigation');
 const $ = (selector, root = document) => root.querySelector(selector);
-const state = { products: [], orders: [], inventory: null };
+const state = { packageSizes: [], orders: [], inventory: null };
 
 const routes = {
   '/usuario/pedido': { role: 'usuario', title: 'Crear un pedido', eyebrow: 'ESPACIO DE USUARIO', render: renderNewOrder },
@@ -125,35 +125,59 @@ function renderOrders() {
   $('#refreshOrders').addEventListener('click', refresh); refresh();
 }
 function renderNewOrder() {
-  app.innerHTML = `${pageHeading('¿Qué necesitas enviar?', 'Completa los datos y consulta el avance de tu entrega.')}<div class="hero"><div><h2>Tu entrega empieza aquí</h2><p>Crea un pedido y podrás seguir su recorrido en tiempo real.</p></div><a class="btn" href="#/usuario/seguimiento">⌖ Seguir pedido</a></div><section class="panel"><div class="panel-head"><div><h3>Datos del pedido</h3><p>Los campos marcados son necesarios para procesar la solicitud.</p></div><span class="pill info">NUEVO</span></div><div id="orderNotice"></div><form id="orderForm"><div class="form-grid"><div class="field full"><label for="deliveryAddress">Dirección de entrega</label><input id="deliveryAddress" name="delivery_address" required minlength="5" placeholder="Calle, número, colonia, ciudad"></div><div class="field full"><label>Productos</label><div id="orderItems"></div><button type="button" class="btn secondary small" id="addItem">＋ Agregar producto</button></div></div><div class="form-footer"><span class="form-hint">El total se confirma al procesar el pedido.</span><button type="submit" class="btn" id="submitOrder">Crear pedido →</button></div></form></section>`;
-  loadProducts(); addOrderItem();
-  $('#addItem').addEventListener('click', () => addOrderItem());
+  app.innerHTML = `${pageHeading('Crea tu envío', 'Elige el tamaño del paquete y agrega la dirección de entrega.')}<div class="hero"><div><h2>Tu envío empieza aquí</h2><p>Selecciona el paquete que mejor se adapte a lo que vas a enviar.</p></div><a class="btn" href="#/usuario/seguimiento">⌖ Seguir pedido</a></div><section class="panel"><div class="panel-head"><div><h3>1. Elige el tamaño</h3><p>El precio mostrado corresponde al tamaño seleccionado.</p></div><span class="pill info">ENVÍO</span></div><div id="orderNotice"></div><form id="orderForm"><div id="packageSizes" class="size-options"><div class="loading-card">Cargando tamaños disponibles…</div></div><div class="form-grid order-address"><div class="field full"><label for="deliveryAddress">2. Dirección de entrega</label><input id="deliveryAddress" name="delivery_address" required minlength="5" placeholder="Calle, número, colonia, ciudad"></div></div><div class="price-summary"><span>Precio del envío</span><strong id="selectedPrice">Selecciona un tamaño</strong></div><div class="form-footer"><span class="form-hint">El precio final se confirma al crear el pedido.</span><button type="submit" class="btn" id="submitOrder" disabled>Crear pedido →</button></div></form></section>`;
+  loadPackageSizes();
   $('#orderForm').addEventListener('submit', submitOrder);
 }
-async function loadProducts() {
+async function loadPackageSizes() {
   try {
-    const data = await api('/api/products'); state.products = Array.isArray(data) ? data : (data.products || []);
-    if (!state.products.length) { $('#orderItems').innerHTML = notice('El catálogo está vacío. No hay productos disponibles para agregar.', 'error'); return; }
-    renderItemSelects();
+    const data = await api('/api/package-sizes');
+    const sizes = Array.isArray(data) ? data : (data.package_sizes || data.sizes || []);
+    state.packageSizes = sizes.filter(size => (size.is_active ?? size.active) !== false);
+    if (!state.packageSizes.length) {
+      $('#packageSizes').innerHTML = '<div class="empty-state"><strong>No hay tamaños disponibles</strong>Vuelve a intentarlo más tarde.</div>';
+      return;
+    }
+    renderPackageSizes();
   } catch (error) {
-    $('#orderItems').innerHTML = notice(`No se pudo cargar el catálogo: ${error.message}. El pedido no puede enviarse hasta que el servicio esté disponible.`, 'error');
-    $('#addItem').disabled = true; $('#submitOrder').disabled = true;
+    $('#packageSizes').innerHTML = notice(`No se pudo cargar el catálogo de tamaños: ${error.message}.`, 'error');
   }
 }
-function addOrderItem() {
-  if (!state.products.length) { $('#orderItems').innerHTML = '<div class="loading-card">Cargando catálogo…</div>'; return; }
-  const row = document.createElement('div'); row.className = 'item-row';
-  row.innerHTML = `<div class="field"><label>Producto</label><select class="product-select" required>${state.products.map(product => `<option value="${escapeHtml(product.product_id)}">${escapeHtml(product.name)} · ${money(product.price)}</option>`).join('')}</select></div><div class="field"><label>Cantidad</label><input type="number" class="quantity-input" min="1" step="1" value="1" required></div><button type="button" class="item-remove" aria-label="Quitar producto">×</button>`;
-  row.querySelector('.item-remove').addEventListener('click', () => { if ($('#orderItems').querySelectorAll('.item-row').length > 1) row.remove(); });
-  $('#orderItems').append(row);
+function packageDimensions(size) {
+  const dimensions = size.dimensions ?? size.measurements ?? size.measures ?? size.medidas;
+  if (typeof dimensions === 'string') return dimensions;
+  if (dimensions && typeof dimensions === 'object') {
+    const { length, width, height, unit = 'cm' } = dimensions;
+    if (length != null && width != null && height != null) return `${length} × ${width} × ${height} ${unit}`;
+    return Object.values(dimensions).join(' × ');
+  }
+  return 'Medidas no especificadas';
 }
-function renderItemSelects() { $('#orderItems').innerHTML = ''; addOrderItem(); }
+function renderPackageSizes() {
+  $('#packageSizes').innerHTML = state.packageSizes.map((size, index) => {
+    const id = size.id ?? size.package_size_id;
+    const maxWeight = size.max_weight_kg ?? size.max_weight ?? size.weight_limit_kg;
+    const name = size.name ?? size.nombre ?? `Tamaño ${index + 1}`;
+    return `<label class="size-option" for="packageSize${index}"><input id="packageSize${index}" type="radio" name="package_size_id" value="${escapeHtml(id)}" required><span class="size-check" aria-hidden="true"></span><span class="size-name">${escapeHtml(name)}</span><span class="size-dimensions">${escapeHtml(packageDimensions(size))}</span><span class="size-weight">Hasta ${escapeHtml(maxWeight ?? '—')} kg</span><strong class="size-price">${money(size.price)}</strong></label>`;
+  }).join('');
+  $('#packageSizes').querySelectorAll('input[name="package_size_id"]').forEach(input => input.addEventListener('change', updateSelectedPackagePrice));
+  $('#submitOrder').disabled = true;
+}
+function updateSelectedPackagePrice() {
+  const selectedId = $('input[name="package_size_id"]:checked')?.value;
+  const selected = state.packageSizes.find(size => String(size.id ?? size.package_size_id) === selectedId);
+  $('#selectedPrice').textContent = selected ? money(selected.price) : 'Selecciona un tamaño';
+  $('#submitOrder').disabled = !selected;
+}
 async function submitOrder(event) {
   event.preventDefault(); const button = $('#submitOrder'); button.disabled = true; button.textContent = 'Enviando…'; $('#orderNotice').innerHTML = '';
-  const items = [...document.querySelectorAll('.item-row')].map(row => ({ product_id: row.querySelector('.product-select').value, quantity: Number(row.querySelector('.quantity-input').value) }));
+  const selectedId = $('input[name="package_size_id"]:checked')?.value;
+  const selectedSize = state.packageSizes.find(size => String(size.id ?? size.package_size_id) === selectedId);
   try {
-    const result = await api('/api/orders', { method: 'POST', body: JSON.stringify({ delivery_address: $('#deliveryAddress').value.trim(), items }) });
-    $('#orderNotice').innerHTML = notice(`Pedido creado correctamente. Identificador: ${result.order_id}.`, 'success');
+    if (!selectedSize) throw new Error('Selecciona un tamaño para el paquete.');
+    const result = await api('/api/orders', { method: 'POST', body: JSON.stringify({ package_size_id: selectedSize.id ?? selectedSize.package_size_id, delivery_address: $('#deliveryAddress').value.trim() }) });
+    const confirmedPrice = result.confirmed_price ?? result.price ?? result.total ?? selectedSize.price;
+    $('#orderNotice').innerHTML = notice(`Pedido creado correctamente. Identificador: ${result.order_id}. Precio confirmado: ${money(confirmedPrice)}.`, 'success');
     if (result.order_id) { sessionStorage.setItem('lastOrderId', result.order_id); setTimeout(() => { location.hash = `#/usuario/seguimiento?order_id=${encodeURIComponent(result.order_id)}`; }, 1000); }
   } catch (error) {
     if (error.status === 503 && error.data.order_id) {
