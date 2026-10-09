@@ -171,7 +171,70 @@ def get_order(order_id: str):
         }
     )
 
+@app.patch("/api/orders/<order_id>/cancel")
+def cancel_order(order_id: str):
+    try:
+        with get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT status
+                    FROM orders
+                    WHERE order_id = %s
+                    FOR UPDATE
+                    """,
+                    (order_id,),
+                )
 
+                order = cursor.fetchone()
+
+                if order is None:
+                    return jsonify(
+                        {
+                            "error": "ORDER_NOT_FOUND",
+                            "order_id": order_id,
+                        }
+                    ), 404
+
+                current_status = order[0]
+
+                if current_status != "RECEIVED":
+                    return jsonify(
+                        {
+                            "error": "ORDER_CANNOT_BE_CANCELLED",
+                            "order_id": order_id,
+                            "status": current_status,
+                        }
+                    ), 409
+
+                cursor.execute(
+                    """
+                    UPDATE orders
+                    SET status = 'CANCELLED'
+                    WHERE order_id = %s
+                    """,
+                    (order_id,),
+                )
+
+                cursor.execute(
+                    """
+                    INSERT INTO order_history (order_id, status)
+                    VALUES (%s, %s)
+                    """,
+                    (order_id, "CANCELLED"),
+                )
+
+    except Exception:
+        logging.exception("Error al cancelar el pedido")
+        return jsonify({"error": "DATABASE_UNAVAILABLE"}), 503
+
+    return jsonify(
+        {
+            "order_id": order_id,
+            "status": "CANCELLED",
+        }
+    ), 200
+   
 def validate_order_payload(payload):
     if not isinstance(payload, dict):
         return "INVALID_JSON"
