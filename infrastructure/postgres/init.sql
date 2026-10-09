@@ -20,6 +20,34 @@ CREATE TABLE IF NOT EXISTS processed_events (
     PRIMARY KEY (event_id, service_name)
 );
 
+-- ALUMNO-2: cuentas de usuario. El registro usa el rol por defecto 'user';
+-- un 'admin' solo se asigna de forma manual o mediante un proceso autorizado.
+CREATE TABLE IF NOT EXISTS users (
+    user_id SERIAL PRIMARY KEY,
+    email VARCHAR(254) NOT NULL CHECK (email ~ '^[^@\s]+@[^@\s]+\.[^@\s]+$'),
+    name VARCHAR(120) NOT NULL CHECK (btrim(name) <> ''),
+    phone VARCHAR(20) CHECK (phone ~ '^\+?[0-9]{10,15}$'),
+    address VARCHAR(200),
+    role VARCHAR(10) NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    is_active BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+-- Email único sin distinguir mayúsculas: Ana@correo.com y ana@correo.com son la misma cuenta.
+CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (lower(email));
+
+-- ALUMNO-2: catálogo de tamaños de paquete. El usuario elige uno al crear el pedido.
+CREATE TABLE IF NOT EXISTS package_sizes (
+    package_size_id VARCHAR(20) NOT NULL PRIMARY KEY,
+    name VARCHAR(60) NOT NULL UNIQUE,
+    length_cm NUMERIC(6, 1) NOT NULL CHECK (length_cm > 0),
+    width_cm NUMERIC(6, 1) NOT NULL CHECK (width_cm > 0),
+    height_cm NUMERIC(6, 1) NOT NULL CHECK (height_cm > 0),
+    max_weight_kg NUMERIC(6, 2) NOT NULL CHECK (max_weight_kg > 0),
+    price NUMERIC(10, 2) NOT NULL CHECK (price >= 0),
+    is_active BOOLEAN NOT NULL DEFAULT TRUE
+);
+
 -- ALUMNO-2: historial de reservas. Guarda el evento publicado para reenviarlo
 -- si Kafka entrega otra vez el mismo ORDER_CREATED.
 CREATE TABLE IF NOT EXISTS inventory_reservations (
@@ -42,9 +70,14 @@ CREATE TABLE IF NOT EXISTS orders (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     delivery_address VARCHAR(200) NOT NULL,
     status VARCHAR(30) NOT NULL DEFAULT 'RECEIVED',
+    -- ALUMNO-2: tamaño elegido y precio confirmado al crear el pedido. Son opcionales
+    -- mientras Orders siga creando pedidos por productos; si se guarda uno, se guardan ambos.
+    package_size_id VARCHAR(20) REFERENCES package_sizes(package_size_id),
+    confirmed_price NUMERIC(10, 2) CHECK (confirmed_price >= 0),
     -- ALUMNO-2: columnas que asigna Delivery (vacías hasta DRIVER_ASSIGNED).
     driver_id VARCHAR(20),
-    vehicle_id VARCHAR(20)
+    vehicle_id VARCHAR(20),
+    CHECK ((package_size_id IS NULL) = (confirmed_price IS NULL))
 );
 
 CREATE TABLE IF NOT EXISTS order_history (
@@ -78,3 +111,13 @@ INSERT INTO inventory (product_id, warehouse, quantity) VALUES
     ('PROD-003', 'NORTE', 20),
     ('PROD-003', 'SUR', 14)
 ON CONFLICT DO NOTHING;
+
+INSERT INTO package_sizes (package_size_id, name, length_cm, width_cm, height_cm, max_weight_kg, price) VALUES
+    ('PKG-XS', 'Sobre', 35.0, 25.0, 2.0, 0.50, 89.00),
+    ('PKG-S', 'Chico', 25.0, 20.0, 10.0, 2.00, 129.00),
+    ('PKG-M', 'Mediano', 40.0, 30.0, 20.0, 5.00, 189.00),
+    ('PKG-L', 'Grande', 50.0, 40.0, 30.0, 10.00, 269.00),
+    ('PKG-XL', 'Extra grande', 70.0, 50.0, 40.0, 25.00, 399.00)
+ON CONFLICT DO NOTHING;
+
+
