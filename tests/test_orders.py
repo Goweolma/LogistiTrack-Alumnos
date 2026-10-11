@@ -663,3 +663,92 @@ def test_cancel_order_rejects_when_status_is_not_received(monkeypatch):
         "INSERT INTO order_history" in query
         for query in cursor.queries
     )
+
+def test_list_package_sizes_returns_active_catalog(monkeypatch):
+    cursor = FakeCursor(
+        orders_list=[
+            (
+                "PKG-S",
+                "Chico",
+                25.0,
+                20.0,
+                10.0,
+                2.0,
+                129.0,
+                True,
+            ),
+            (
+                "PKG-M",
+                "Mediano",
+                40.0,
+                30.0,
+                20.0,
+                5.0,
+                189.0,
+                True,
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    client = orders.app.test_client()
+    response = client.get("/api/package-sizes")
+
+    assert response.status_code == 200
+    assert response.get_json() == [
+        {
+            "package_size_id": "PKG-S",
+            "name": "Chico",
+            "dimensions": {
+                "length": 25.0,
+                "width": 20.0,
+                "height": 10.0,
+                "unit": "cm",
+            },
+            "max_weight_kg": 2.0,
+            "price": 129.0,
+            "is_active": True,
+        },
+        {
+            "package_size_id": "PKG-M",
+            "name": "Mediano",
+            "dimensions": {
+                "length": 40.0,
+                "width": 30.0,
+                "height": 20.0,
+                "unit": "cm",
+            },
+            "max_weight_kg": 5.0,
+            "price": 189.0,
+            "is_active": True,
+        },
+    ]
+
+    assert any(
+        "FROM package_sizes" in query
+        and "WHERE is_active = TRUE" in query
+        for query in cursor.queries
+    )
+
+def test_list_package_sizes_returns_503_when_database_fails(monkeypatch):
+    def broken_connection():
+        raise RuntimeError("Database unavailable")
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        broken_connection,
+    )
+
+    client = orders.app.test_client()
+    response = client.get("/api/package-sizes")
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "error": "DATABASE_UNAVAILABLE"
+    }
