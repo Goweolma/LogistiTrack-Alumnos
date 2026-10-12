@@ -5,6 +5,11 @@ CREATE TABLE IF NOT EXISTS products (
     price NUMERIC(10, 2) NOT NULL CHECK (price >= 0)
 );
 
+-- Actualiza volúmenes existentes que se crearon antes de agregar descripciones.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS product_description VARCHAR(200);
+UPDATE products SET product_description = name WHERE product_description IS NULL;
+ALTER TABLE products ALTER COLUMN product_description SET NOT NULL;
+
 CREATE TABLE IF NOT EXISTS inventory (
     product_id VARCHAR(40) REFERENCES products(product_id),
     warehouse VARCHAR(30) NOT NULL CHECK (warehouse IN ('NORTE', 'SUR')),

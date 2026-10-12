@@ -40,7 +40,9 @@ def ensure_auth_schema():
             """)
             cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)")
             cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (lower(email))")
-            cursor.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(user_id)")
+            cursor.execute("SELECT to_regclass('public.orders')")
+            if cursor.fetchone()[0] is not None:
+                cursor.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(user_id)")
             admin_email = os.getenv("INITIAL_ADMIN_EMAIL", "").strip().lower()
             admin_password = os.getenv("INITIAL_ADMIN_PASSWORD", "")
             if admin_email and admin_password:
