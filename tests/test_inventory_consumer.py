@@ -620,3 +620,53 @@ def test_consumer_sends_invalid_order_state_to_dead_letter_and_commits(monkeypat
     assert len(dead_letters) == 1 and dead_letters[0].startswith("INVALID_ORDER_STATE")
     assert consumer.committed == [message]
     assert db.stock[("PROD-001", "NORTE")] == 2
+
+
+def test_cancelled_order_is_skipped_without_stock_history_or_publication(db, published):
+    db.orders["PED-000001"] = "CANCELLED"
+    before = dict(db.stock)
+    event = order_created(("PROD-001", 1))
+
+    assert inventory.process_order_event(event, producer=object()) == "cancelled"
+
+    assert db.stock == before
+    assert db.orders["PED-000001"] == "CANCELLED"
+    assert db.history == []
+    assert db.reservations == {}
+    assert published == []
+    # Ni siquiera bloquea existencias: solo registra el evento como atendido.
+    assert count_queries(db, "SELECT product_id") == 0
+    assert count_queries(db, "UPDATE") == 0
+    assert db.processed == {(event["event_id"], "inventory")}
+
+
+def test_redelivered_event_for_cancelled_order_is_a_silent_duplicate(db, published):
+    db.orders["PED-000001"] = "CANCELLED"
+    event = order_created(("PROD-001", 1))
+    inventory.process_order_event(event, producer=object())
+
+    assert inventory.process_order_event(event, producer=object()) == "duplicate"
+
+    assert db.stock[("PROD-001", "NORTE")] == 2
+    assert db.stock[("PROD-001", "SUR")] == 5
+    assert db.history == []
+    assert published == []
+
+
+def test_consumer_commits_cancelled_order_without_dead_letter(monkeypatch, db, published):
+    db.orders["PED-000001"] = "CANCELLED"
+    dead_letters = []
+    monkeypatch.setattr(
+        inventory,
+        "publish_dead_letter",
+        lambda producer, event, reason, source: dead_letters.append(reason),
+    )
+    message = FakeMessage(json.dumps(order_created(("PROD-001", 1))).encode())
+    consumer = FakeConsumer([message])
+
+    run_consumer_once(monkeypatch, consumer)
+
+    assert dead_letters == []
+    assert consumer.committed == [message]
+    assert published == []
+    assert db.history == []
