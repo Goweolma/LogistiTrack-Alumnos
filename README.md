@@ -55,6 +55,13 @@ Abrir <http://localhost:8080>. La interfaz de `develop` comprueba
 `/api/health`. Las páginas, los componentes y el enrutamiento quedan
 comentados para el alumno 6.
 
+El acceso separa las cuentas de usuario y administrador. Registra una cuenta
+desde **Soy usuario**. Para entrar como administrador local, configura
+`INITIAL_ADMIN_EMAIL` y `INITIAL_ADMIN_PASSWORD` en `.env`; los valores de
+demostración son `admin@ray-o.local` y `AdminLocal2026!`. El registro público
+solo crea cuentas de usuario. Cambia las credenciales y `SESSION_SECRET` antes
+de usarlo fuera de una demostración local.
+
 Validar la base:
 
 ```powershell

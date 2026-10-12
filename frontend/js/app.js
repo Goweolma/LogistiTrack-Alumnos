@@ -1,7 +1,7 @@
 const app = document.querySelector('#app');
 const nav = document.querySelector('#navigation');
 const $ = (selector, root = document) => root.querySelector(selector);
-const state = { packageSizes: [], orders: [], inventory: null };
+const state = { packageSizes: [], orders: [], inventory: null, sessionUser: null };
 
 const routes = {
   '/acceso': { role: null, title: 'Bienvenido a Ray-o', eyebrow: 'ENVÍOS SENCILLOS', render: renderAccess },
@@ -38,6 +38,8 @@ function setPage(route) {
   document.querySelector('#pageTitle').textContent = route.title;
   document.querySelector('#pageEyebrow').textContent = route.eyebrow;
   document.querySelector('.app-shell').classList.toggle('access-mode', !route.role);
+  const roleSwitch = document.querySelector('.role-switch');
+  if (roleSwitch) roleSwitch.hidden = true;
   if (!route.role) { nav.innerHTML = ''; return; }
   const active = (location.hash.slice(1).split('?')[0]) || '/usuario/pedido';
   document.querySelectorAll('[data-role-link]').forEach(link => link.classList.toggle('active', link.dataset.roleLink === route.role));
@@ -54,7 +56,7 @@ function resolveRoute() {
   if (path === '/inventario') path = '/admin/inventario';
   if (!routes[path]) { location.hash = '#/acceso'; return; }
   const route = routes[path];
-  const user = getSessionUser();
+  const user = state.sessionUser || getSessionUser();
   if (route.role && !user) { location.hash = '#/acceso'; return; }
   if (route.role && user.role !== route.role) {
     location.hash = user.role === 'admin' ? '#/admin/tablero' : '#/usuario/pedido';
@@ -71,15 +73,16 @@ function getSessionUser() {
   try { return JSON.parse(sessionStorage.getItem('rayOUser') || 'null'); }
   catch { sessionStorage.removeItem('rayOUser'); return null; }
 }
-function logout() {
+async function logout() {
+  try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* limpia la vista aunque el servidor no responda */ }
+  state.sessionUser = null;
   sessionStorage.removeItem('rayOUser');
   sessionStorage.removeItem('rayOToken');
   location.hash = '#/acceso';
   resolveRoute();
 }
 async function api(path, options = {}) {
-  const token = sessionStorage.getItem('rayOToken');
-  const response = await fetch(path, { headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(options.headers || {}) }, ...options });
+  const response = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...options });
   let data = {};
   try { data = await response.json(); } catch { data = {}; }
   if (!response.ok) {
@@ -162,7 +165,8 @@ function normalizeRole(role = '') {
 }
 function establishSession(user, role, email, token) {
   if (!role) throw new Error('La API no devolvió el rol de la cuenta.');
-  sessionStorage.setItem('rayOUser', JSON.stringify({ ...user, email: user.email || email, role }));
+  state.sessionUser = { ...user, email: user.email || email, role };
+  sessionStorage.setItem('rayOUser', JSON.stringify(state.sessionUser));
   if (token) sessionStorage.setItem('rayOToken', token);
   location.hash = role === 'admin' ? '#/admin/tablero' : '#/usuario/pedido';
 }
@@ -318,4 +322,16 @@ function renderInventory() {
 
 document.querySelector('#today').textContent = new Date().toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
 window.addEventListener('hashchange', resolveRoute);
-resolveRoute();
+async function initializeAccess() {
+  try {
+    const data = await api('/api/auth/me');
+    state.sessionUser = { ...data.user, role: normalizeRole(data.user.role) };
+    sessionStorage.setItem('rayOUser', JSON.stringify(state.sessionUser));
+  } catch {
+    state.sessionUser = null;
+    sessionStorage.removeItem('rayOUser');
+    sessionStorage.removeItem('rayOToken');
+  }
+  resolveRoute();
+}
+initializeAccess();

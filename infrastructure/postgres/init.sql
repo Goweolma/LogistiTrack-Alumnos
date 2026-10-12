@@ -12,6 +12,20 @@ CREATE TABLE IF NOT EXISTS inventory (
     PRIMARY KEY (product_id, warehouse)
 );
 
+-- Cuentas: el registro público siempre usa rol user; admin se provisiona por configuración.
+CREATE TABLE IF NOT EXISTS users (
+    user_id SERIAL PRIMARY KEY,
+    email VARCHAR(254) NOT NULL,
+    name VARCHAR(120) NOT NULL,
+    phone VARCHAR(20),
+    address VARCHAR(200),
+    role VARCHAR(10) NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    password_hash VARCHAR(255) NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users (lower(email));
+
 -- Idempotencia: cada event_id se procesa una sola vez por servicio.
 CREATE TABLE IF NOT EXISTS processed_events (
     event_id UUID NOT NULL,
@@ -42,6 +56,7 @@ CREATE TABLE IF NOT EXISTS orders (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     delivery_address VARCHAR(200) NOT NULL,
     status VARCHAR(30) NOT NULL DEFAULT 'RECEIVED',
+    user_id INTEGER REFERENCES users(user_id),
     -- ALUMNO-2: columnas que asigna Delivery (vacías hasta DRIVER_ASSIGNED).
     driver_id VARCHAR(20),
     vehicle_id VARCHAR(20)

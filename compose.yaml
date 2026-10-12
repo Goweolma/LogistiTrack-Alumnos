@@ -78,6 +78,10 @@ services:
     environment:
       <<: *app-environment
       SERVICE_NAME: orders
+      SESSION_SECRET: ${SESSION_SECRET:-local-ray-o-secret-cambia-esto}
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL:-admin@ray-o.local}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-AdminLocal2026!}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
       INVENTORY_HEALTH_URL: http://inventory:5002/health
       WAREHOUSE_HEALTH_URL: http://warehouse:5003/health
       DELIVERY_HEALTH_URL: http://delivery:5004/health
