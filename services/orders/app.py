@@ -234,7 +234,6 @@ def cancel_order(order_id: str):
             "status": "CANCELLED",
         }
     ), 200
-   
 def validate_order_payload(payload):
     if not isinstance(payload, dict):
         return "INVALID_JSON"

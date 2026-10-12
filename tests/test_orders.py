@@ -663,3 +663,116 @@ def test_cancel_order_rejects_when_status_is_not_received(monkeypatch):
         "INSERT INTO order_history" in query
         for query in cursor.queries
     )
+
+def test_cancel_order_returns_503_when_database_fails(monkeypatch):
+    def broken_connection():
+        raise RuntimeError("Database unavailable")
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        broken_connection,
+    )
+
+    client = orders.app.test_client()
+    response = client.patch("/api/orders/PED-000001/cancel")
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "error": "DATABASE_UNAVAILABLE"
+    }
+
+def test_cancel_order_rolls_back_when_history_insert_fails(monkeypatch):
+    class FailingCursor:
+        def __init__(self):
+            self.queries = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def execute(self, query, params=None):
+            query = " ".join(query.split())
+            self.queries.append(query)
+
+            if "INSERT INTO order_history" in query:
+                raise RuntimeError("History insert failed")
+
+        def fetchone(self):
+            return ("RECEIVED",)
+
+    class RollbackConnection:
+        def __init__(self, cursor):
+            self.fake_cursor = cursor
+            self.rolled_back = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            if exc_type is not None:
+                self.rolled_back = True
+            return False
+
+        def cursor(self):
+            return self.fake_cursor
+
+    cursor = FailingCursor()
+    connection = RollbackConnection(cursor)
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: connection,
+    )
+
+    client = orders.app.test_client()
+    response = client.patch("/api/orders/PED-000001/cancel")
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "error": "DATABASE_UNAVAILABLE"
+    }
+
+    assert connection.rolled_back is True
+
+    assert any(
+        "UPDATE orders" in query
+        for query in cursor.queries
+    )
+
+    assert any(
+        "INSERT INTO order_history" in query
+        for query in cursor.queries
+    )
+
+def test_cancel_order_rejects_second_cancellation(monkeypatch):
+    cursor = FakeCursor(order=("CANCELLED",))
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    client = orders.app.test_client()
+    response = client.patch("/api/orders/PED-000001/cancel")
+
+    assert response.status_code == 409
+    assert response.get_json() == {
+        "error": "ORDER_CANNOT_BE_CANCELLED",
+        "order_id": "PED-000001",
+        "status": "CANCELLED",
+    }
+
+    assert not any(
+        "UPDATE orders" in query
+        for query in cursor.queries
+    )
+
+    assert not any(
+        "INSERT INTO order_history" in query
+        for query in cursor.queries
+    )
