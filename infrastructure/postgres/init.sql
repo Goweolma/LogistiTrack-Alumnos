@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS users (
     address VARCHAR(200),
     role VARCHAR(10) NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    is_active BOOLEAN NOT NULL DEFAULT TRUE
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    password_hash VARCHAR(255) NOT NULL
 );
 
 -- Email único sin distinguir mayúsculas: Ana@correo.com y ana@correo.com son la misma cuenta.

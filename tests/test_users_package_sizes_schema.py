@@ -22,6 +22,9 @@ PACKAGE_ROW = re.compile(
     r"\('(PKG-[A-Z]+)', '([^']+)', ([\d.]+), ([\d.]+), ([\d.]+), ([\d.]+), ([\d.]+)\)"
 )
 
+# Hash de prueba con el formato de Werkzeug (Orders lo genera); la base solo guarda el texto.
+PASSWORD_HASH = "scrypt:32768:8:1$sal$" + "a" * 128
+
 
 def _table_block(table: str) -> str:
     return INIT_SQL.split(f"CREATE TABLE IF NOT EXISTS {table} (", 1)[1].split(");", 1)[0]
@@ -47,6 +50,7 @@ def test_users_has_required_columns_and_defaults():
     assert "role VARCHAR(10) NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin'))" in block
     assert "created_at TIMESTAMPTZ NOT NULL DEFAULT now()" in block
     assert "is_active BOOLEAN NOT NULL DEFAULT TRUE" in block
+    assert "password_hash VARCHAR(255) NOT NULL" in block
 
 
 def test_users_email_is_unique_ignoring_case():
@@ -125,16 +129,25 @@ def _rejects(connection, error, query, params=()):
 
 
 def test_db_registration_creates_active_user_accounts(db):
-    role, is_active, created_at = db.execute(
-        "INSERT INTO users (email, name) VALUES ('ana@correo.com', 'Ana') RETURNING role, is_active, created_at"
+    role, is_active, created_at, password_hash = db.execute(
+        "INSERT INTO users (email, name, password_hash) VALUES ('ana@correo.com', 'Ana', %s) "
+        "RETURNING role, is_active, created_at, password_hash",
+        (PASSWORD_HASH,),
     ).fetchone()
 
     assert (role, is_active) == ("user", True)
     assert created_at is not None
+    assert password_hash == PASSWORD_HASH
+
+
+def test_db_rejects_user_without_password(db):
+    _rejects(db, errors.NotNullViolation, "INSERT INTO users (email, name) VALUES ('ana@correo.com', 'Ana')")
 
 
 def test_db_admin_is_only_assigned_explicitly(db):
-    db.execute("INSERT INTO users (email, name) VALUES ('ana@correo.com', 'Ana')")
+    db.execute(
+        "INSERT INTO users (email, name, password_hash) VALUES ('ana@correo.com', 'Ana', %s)", (PASSWORD_HASH,)
+    )
     db.execute("UPDATE users SET role = 'admin' WHERE email = 'ana@correo.com'")
 
     assert db.execute("SELECT role FROM users").fetchone() == ("admin",)
@@ -153,13 +166,26 @@ def test_db_admin_is_only_assigned_explicitly(db):
 )
 def test_db_rejects_invalid_user_data(db, columns, values):
     placeholders = ", ".join(["%s"] * len(values))
-    _rejects(db, errors.CheckViolation, f"INSERT INTO users ({columns}) VALUES ({placeholders})", values)
+    _rejects(
+        db,
+        errors.CheckViolation,
+        f"INSERT INTO users ({columns}, password_hash) VALUES ({placeholders}, %s)",
+        (*values, PASSWORD_HASH),
+    )
 
 
 def test_db_rejects_duplicate_email_ignoring_case(db):
-    db.execute("INSERT INTO users (email, name, phone) VALUES ('ana@correo.com', 'Ana', '+525512345678')")
+    db.execute(
+        "INSERT INTO users (email, name, phone, password_hash) VALUES ('ana@correo.com', 'Ana', '+525512345678', %s)",
+        (PASSWORD_HASH,),
+    )
 
-    _rejects(db, errors.UniqueViolation, "INSERT INTO users (email, name) VALUES ('ANA@correo.com', 'Otra Ana')")
+    _rejects(
+        db,
+        errors.UniqueViolation,
+        "INSERT INTO users (email, name, password_hash) VALUES ('ANA@correo.com', 'Otra Ana', %s)",
+        (PASSWORD_HASH,),
+    )
 
 
 def test_db_catalog_has_five_active_sizes(db):
