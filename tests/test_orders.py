@@ -867,3 +867,153 @@ def test_cancel_order_rejects_second_cancellation(monkeypatch):
         "INSERT INTO order_history" in query
         for query in cursor.queries
     )
+def test_login_returns_user_with_correct_role(monkeypatch):
+    from werkzeug.security import generate_password_hash
+
+    cursor = FakeCursor(
+        order=(
+            1,
+            "fer@correo.com",
+            "Fer",
+            "4491234567",
+            "Aguascalientes",
+            "user",
+            True,
+            generate_password_hash("password123"),
+        )
+    )
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    client = orders.app.test_client()
+    response = client.post(
+        "/api/auth/login",
+        json={
+            "email": "FER@correo.com",
+            "password": "password123",
+            "requested_role": "user",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["user"]["role"] == "user"
+    assert response.get_json()["user"]["email"] == "fer@correo.com"
+
+
+def test_login_rejects_wrong_password(monkeypatch):
+    from werkzeug.security import generate_password_hash
+
+    cursor = FakeCursor(
+        order=(
+            1,
+            "fer@correo.com",
+            "Fer",
+            None,
+            None,
+            "user",
+            True,
+            generate_password_hash("password123"),
+        )
+    )
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    client = orders.app.test_client()
+    response = client.post(
+        "/api/auth/login",
+        json={
+            "email": "fer@correo.com",
+            "password": "incorrecta",
+            "requested_role": "user",
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.get_json() == {
+        "error": "INVALID_CREDENTIALS"
+    }
+
+
+def test_login_rejects_wrong_role(monkeypatch):
+    from werkzeug.security import generate_password_hash
+
+    cursor = FakeCursor(
+        order=(
+            1,
+            "fer@correo.com",
+            "Fer",
+            None,
+            None,
+            "user",
+            True,
+            generate_password_hash("password123"),
+        )
+    )
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    client = orders.app.test_client()
+    response = client.post(
+        "/api/auth/login",
+        json={
+            "email": "fer@correo.com",
+            "password": "password123",
+            "requested_role": "admin",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.get_json() == {
+        "error": "ROLE_ACCESS_DENIED",
+        "requested_role": "admin",
+    }
+
+
+def test_login_rejects_inactive_user(monkeypatch):
+    from werkzeug.security import generate_password_hash
+
+    cursor = FakeCursor(
+        order=(
+            1,
+            "fer@correo.com",
+            "Fer",
+            None,
+            None,
+            "user",
+            False,
+            generate_password_hash("password123"),
+        )
+    )
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    client = orders.app.test_client()
+    response = client.post(
+        "/api/auth/login",
+        json={
+            "email": "fer@correo.com",
+            "password": "password123",
+            "requested_role": "user",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.get_json() == {
+        "error": "ACCOUNT_INACTIVE"
+    }
