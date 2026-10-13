@@ -156,7 +156,14 @@ def get_order(order_id: str):
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT order_id, total, created_at, delivery_address, status
+                    SELECT
+                    order_id,
+                    total,
+                    created_at,
+                    delivery_address,
+                    status,
+                    package_size_id,
+                    confirmed_price
                     FROM orders
                     WHERE order_id = %s
                     """,
@@ -208,6 +215,12 @@ def get_order(order_id: str):
             "created_at": order[2].isoformat(),
             "delivery_address": order[3],
             "status": order[4],
+            "package_size_id": order[5] if len(order) > 5 else None,
+            "confirmed_price": (
+                float(order[6])
+                if len(order) > 6 and order[6] is not None
+                else None
+            ),
             "history": [
                 {
                     "status": status,
@@ -294,14 +307,23 @@ def validate_order_payload(payload):
 
     delivery_address = payload.get("delivery_address")
     items = payload.get("items")
-
+    package_size_id = payload.get("package_size_id")
+    if package_size_id is not None and items is not None:
+        return "PACKAGE_SIZE_WITH_ITEMS_NOT_ALLOWED"
     if (
         not isinstance(delivery_address, str)
         or not delivery_address.strip()
         or len(delivery_address.strip()) > 200
     ):
         return "INVALID_DELIVERY_ADDRESS"
+    if package_size_id is not None:
+        if (
+            not isinstance(package_size_id, str)
+            or not package_size_id.strip()
+        ):
+            return "INVALID_PACKAGE_SIZE_ID"
 
+        return None
     if not isinstance(items, list) or not items:
         return "INVALID_ITEMS"
 
@@ -347,63 +369,125 @@ def create_order():
         ), 400
 
     delivery_address = payload["delivery_address"].strip()
-    items = [
-        {
-            "product_id": item["product_id"].strip(),
-            "quantity": item["quantity"],
-        }
-        for item in payload["items"]
-    ]
+    package_size_id = payload.get("package_size_id")
 
+    if package_size_id is not None:
+        package_size_id = package_size_id.strip()
+        items = []
+    else:
+        items = [
+            {
+                "product_id": item["product_id"].strip(),
+                "quantity": item["quantity"],
+            }
+            for item in payload["items"]
+        ]
+
+    confirmed_price = None
 
     try:
         with get_connection() as connection:
             with connection.cursor() as cursor:
-                total = 0
-
-                for item in items:
+                if package_size_id is not None:
                     cursor.execute(
-                        "SELECT price FROM products WHERE product_id = %s",
-                        (item["product_id"],),
+                        """
+                        SELECT price
+                        FROM package_sizes
+                        WHERE package_size_id = %s
+                          AND is_active = TRUE
+                        """,
+                        (package_size_id,),
                     )
-                    product = cursor.fetchone()
 
-                    if product is None:
+                    package_size = cursor.fetchone()
+
+                    if package_size is None:
                         return jsonify(
                             {
                                 "error": "INVALID_ORDER",
-                                "detail": "PRODUCT_NOT_FOUND",
-                                "product_id": item["product_id"],
+                                "detail": "PACKAGE_SIZE_NOT_AVAILABLE",
+                                "package_size_id": package_size_id,
                             }
                         ), 400
 
-                    total += product[0] * item["quantity"]
+                    confirmed_price = package_size[0]
+                    total = confirmed_price
 
-                cursor.execute(
-                    """
-                    INSERT INTO orders (total, delivery_address, status)
-                    VALUES (%s, %s, 'RECEIVED')
-                    RETURNING order_id
-                    """,
-                    (total, delivery_address),
-                )
-
-                order_id = cursor.fetchone()[0]
-
-                for item in items:
                     cursor.execute(
                         """
-                        INSERT INTO order_items (
-                            order_id, product_id, quantity
+                        INSERT INTO orders (
+                            total,
+                            delivery_address,
+                            status,
+                            package_size_id,
+                            confirmed_price
                         )
-                        VALUES (%s, %s, %s)
+                        VALUES (%s, %s, 'RECEIVED', %s, %s)
+                        RETURNING order_id
                         """,
                         (
-                            order_id,
-                            item["product_id"],
-                            item["quantity"],
+                            total,
+                            delivery_address,
+                            package_size_id,
+                            confirmed_price,
                         ),
                     )
+
+                    order_id = cursor.fetchone()[0]
+
+                else:
+                    total = 0
+
+                    for item in items:
+                        cursor.execute(
+                            "SELECT price FROM products WHERE product_id = %s",
+                            (item["product_id"],),
+                        )
+
+                        product = cursor.fetchone()
+
+                        if product is None:
+                            return jsonify(
+                                {
+                                    "error": "INVALID_ORDER",
+                                    "detail": "PRODUCT_NOT_FOUND",
+                                    "product_id": item["product_id"],
+                                }
+                            ), 400
+
+                        total += product[0] * item["quantity"]
+
+                    cursor.execute(
+                        """
+                        INSERT INTO orders (
+                            total,
+                            delivery_address,
+                            status
+                        )
+                        VALUES (%s, %s, 'RECEIVED')
+                        RETURNING order_id
+                        """,
+                        (total, delivery_address),
+                    )
+
+                    order_id = cursor.fetchone()[0]
+
+                    for item in items:
+                        cursor.execute(
+                            """
+                            INSERT INTO order_items (
+                                order_id,
+                                product_id,
+                                quantity
+                            )
+                            VALUES (%s, %s, %s)
+                            """,
+                            (
+                                order_id,
+                                item["product_id"],
+                                item["quantity"],
+                            ),
+                        )
 
                 cursor.execute(
                     """
@@ -416,35 +500,44 @@ def create_order():
     except Exception:
         logging.exception("Error al crear el pedido")
         return jsonify({"error": "DATABASE_UNAVAILABLE"}), 503
-    try:
-        event = build_event(
+
+    # Inventory todavía requiere payload.items.
+    # El flujo legado conserva ORDER_CREATED hasta definir
+    # el contrato distribuido para pedidos por tamaño.
+    if package_size_id is None:
+        try:
+            event = build_event(
                 "ORDER_CREATED",
                 order_id,
                 SERVICE_NAME,
                 {"items": items},
-        )
+            )
 
-        producer = create_producer()
-        publish(producer, ORDERS_TOPIC, event)
+            producer = create_producer()
+            publish(producer, ORDERS_TOPIC, event)
 
-    except Exception:
-        logging.exception("Error al publicar ORDER_CREATED")
-        return jsonify(
-            {
-                "error": "KAFKA_UNAVAILABLE",
-                "order_id": order_id,
-            }
-        ), 503
+        except Exception:
+            logging.exception("Error al publicar ORDER_CREATED")
+            return jsonify(
+                {
+                    "error": "KAFKA_UNAVAILABLE",
+                    "order_id": order_id,
+                }
+            ), 503
 
-    return jsonify(
-        {
-            "order_id": order_id,
-            "status": "RECEIVED",
-            "total": float(total),
-            "items": items,
-        }
-    ), 201
+    response = {
+        "order_id": order_id,
+        "status": "RECEIVED",
+        "total": float(total),
+    }
 
+    if package_size_id is not None:
+        response["package_size_id"] = package_size_id
+        response["confirmed_price"] = float(confirmed_price)
+    else:
+        response["items"] = items
+
+    return jsonify(response), 201
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5001")))
