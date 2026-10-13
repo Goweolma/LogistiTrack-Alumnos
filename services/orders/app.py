@@ -8,6 +8,7 @@ from flask import Flask, jsonify, request
 from common.database import get_connection
 from common.events import build_event
 from common.kafka_client import create_producer, publish
+from werkzeug.security import check_password_hash
 
 
 app = Flask(__name__)
@@ -30,6 +31,106 @@ def platform_health():
         }
     )
 
+@app.post("/api/auth/login")
+def login_user():
+    payload = request.get_json(silent=True)
+
+    if not isinstance(payload, dict):
+        return jsonify(
+            {
+                "error": "INVALID_LOGIN",
+                "detail": "INVALID_JSON",
+            }
+        ), 400
+
+    email = payload.get("email")
+    password = payload.get("password")
+    requested_role = payload.get("requested_role")
+
+    if not isinstance(email, str) or not email.strip():
+        return jsonify(
+            {
+                "error": "INVALID_LOGIN",
+                "detail": "INVALID_EMAIL",
+            }
+        ), 400
+
+    if not isinstance(password, str) or not password:
+        return jsonify(
+            {
+                "error": "INVALID_LOGIN",
+                "detail": "INVALID_PASSWORD",
+            }
+        ), 400
+
+    if requested_role not in ("user", "admin"):
+        return jsonify(
+            {
+                "error": "INVALID_LOGIN",
+                "detail": "INVALID_ROLE",
+            }
+        ), 400
+
+    normalized_email = email.strip().lower()
+
+    try:
+        with get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        user_id,
+                        email,
+                        name,
+                        phone,
+                        address,
+                        role,
+                        is_active,
+                        password_hash
+                    FROM users
+                    WHERE lower(email) = lower(%s)
+                    """,
+                    (normalized_email,),
+                )
+
+                user = cursor.fetchone()
+
+    except Exception:
+        logging.exception("Error al iniciar sesión")
+        return jsonify({"error": "DATABASE_UNAVAILABLE"}), 503
+
+    if user is None:
+        return jsonify({"error": "INVALID_CREDENTIALS"}), 401
+
+    password_hash = user[7]
+
+    if not check_password_hash(password_hash, password):
+        return jsonify({"error": "INVALID_CREDENTIALS"}), 401
+
+    if not user[6]:
+        return jsonify({"error": "ACCOUNT_INACTIVE"}), 403
+
+    if user[5] != requested_role:
+        return jsonify(
+            {
+                "error": "ROLE_ACCESS_DENIED",
+                "requested_role": requested_role,
+            }
+        ), 403
+
+    return jsonify(
+        {
+            "user": {
+                "user_id": user[0],
+                "email": user[1],
+                "name": user[2],
+                "phone": user[3],
+                "address": user[4],
+                "role": user[5],
+                "is_active": user[6],
+            }
+        }
+    ), 200
 
 @app.get("/api/products")
 def list_products():
