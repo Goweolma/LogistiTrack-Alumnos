@@ -1002,3 +1002,59 @@ def test_create_order_rejects_unavailable_package_size(monkeypatch):
         "INSERT INTO orders" in query
         for query, _ in cursor.queries
     )
+def test_create_order_rejects_package_size_with_items():
+    client = orders.app.test_client()
+
+    response = client.post(
+        "/api/orders",
+        json={
+            "delivery_address": "Aguascalientes",
+            "package_size_id": "PKG-M",
+            "items": [
+                {
+                    "product_id": "PROD-001",
+                    "quantity": 1,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": "INVALID_ORDER",
+        "detail": "PACKAGE_SIZE_WITH_ITEMS_NOT_ALLOWED",
+    }
+
+
+def test_get_order_includes_package_size_and_confirmed_price(monkeypatch):
+    cursor = FakeCursor(
+        order=(
+            "PED-000002",
+            189.0,
+            NOW,
+            "Aguascalientes",
+            "RECEIVED",
+            "PKG-M",
+            189.0,
+        ),
+        history=[
+            ("RECEIVED", NOW),
+        ],
+        items=[],
+    )
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    client = orders.app.test_client()
+    response = client.get("/api/orders/PED-000002")
+
+    assert response.status_code == 200
+
+    data = response.get_json()
+
+    assert data["package_size_id"] == "PKG-M"
+    assert data["confirmed_price"] == 189.0

@@ -156,7 +156,14 @@ def get_order(order_id: str):
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    SELECT order_id, total, created_at, delivery_address, status
+                    SELECT
+                    order_id,
+                    total,
+                    created_at,
+                    delivery_address,
+                    status,
+                    package_size_id,
+                    confirmed_price
                     FROM orders
                     WHERE order_id = %s
                     """,
@@ -208,6 +215,12 @@ def get_order(order_id: str):
             "created_at": order[2].isoformat(),
             "delivery_address": order[3],
             "status": order[4],
+            "package_size_id": order[5] if len(order) > 5 else None,
+            "confirmed_price": (
+                float(order[6])
+                if len(order) > 6 and order[6] is not None
+                else None
+            ),
             "history": [
                 {
                     "status": status,
@@ -295,7 +308,8 @@ def validate_order_payload(payload):
     delivery_address = payload.get("delivery_address")
     items = payload.get("items")
     package_size_id = payload.get("package_size_id")
-
+    if package_size_id is not None and items is not None:
+        return "PACKAGE_SIZE_WITH_ITEMS_NOT_ALLOWED"
     if (
         not isinstance(delivery_address, str)
         or not delivery_address.strip()
