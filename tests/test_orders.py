@@ -1118,6 +1118,10 @@ def test_login_returns_user_with_correct_role(monkeypatch):
     assert response.status_code == 200
     assert response.get_json()["user"]["role"] == "user"
     assert response.get_json()["user"]["email"] == "fer@correo.com"
+    data = response.get_json()
+
+    assert isinstance(data["token"], str)
+    assert data["token"]
 
 
 def test_login_rejects_wrong_password(monkeypatch):
@@ -1232,4 +1236,68 @@ def test_login_rejects_inactive_user(monkeypatch):
     assert response.status_code == 403
     assert response.get_json() == {
         "error": "ACCOUNT_INACTIVE"
+    }
+def test_auth_session_returns_user_for_valid_token(monkeypatch):
+    token = orders.create_auth_token(1)
+
+    cursor = FakeCursor(
+        order=(
+            1,
+            "fer@correo.com",
+            "Fer",
+            "4491234567",
+            "Aguascalientes",
+            "user",
+            True,
+        )
+    )
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    client = orders.app.test_client()
+
+    response = client.get(
+        "/api/auth/session",
+        headers={
+            "Authorization": f"Bearer {token}",
+        },
+    )
+
+    assert response.status_code == 200
+
+    user = response.get_json()["user"]
+
+    assert user["user_id"] == 1
+    assert user["email"] == "fer@correo.com"
+    assert user["role"] == "user"
+
+
+def test_auth_session_rejects_invalid_token():
+    client = orders.app.test_client()
+
+    response = client.get(
+        "/api/auth/session",
+        headers={
+            "Authorization": "Bearer token-invalido",
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.get_json() == {
+        "error": "INVALID_SESSION"
+    }
+
+
+def test_auth_session_requires_token():
+    client = orders.app.test_client()
+
+    response = client.get("/api/auth/session")
+
+    assert response.status_code == 401
+    assert response.get_json() == {
+        "error": "AUTH_REQUIRED"
     }

@@ -1,12 +1,12 @@
-"""API base de pedidos. Responsable: Alumno 1."""
-
 import logging
 import os
 import re
 
-from psycopg.errors import UniqueViolation
-from werkzeug.security import generate_password_hash
 from flask import Flask, jsonify, request
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from psycopg.errors import UniqueViolation
+from werkzeug.security import check_password_hash, generate_password_hash
+
 from common.database import get_connection
 from common.events import build_event
 from common.kafka_client import create_producer, publish
@@ -16,6 +16,45 @@ app = Flask(__name__)
 
 SERVICE_NAME = "orders"
 ORDERS_TOPIC = "orders"
+
+AUTH_TOKEN_MAX_AGE_SECONDS = 8 * 60 * 60
+AUTH_TOKEN_SECRET = os.getenv(
+    "AUTH_TOKEN_SECRET",
+    "logistitrack-development-auth-secret",
+)
+
+AUTH_SERIALIZER = URLSafeTimedSerializer(
+    AUTH_TOKEN_SECRET,
+    salt="orders-auth",
+)
+
+
+def create_auth_token(user_id):
+    return AUTH_SERIALIZER.dumps(
+        {
+            "user_id": user_id,
+        }
+    )
+
+
+def decode_auth_token(token):
+    try:
+        return AUTH_SERIALIZER.loads(
+            token,
+            max_age=AUTH_TOKEN_MAX_AGE_SECONDS,
+        )
+    except (BadSignature, SignatureExpired):
+        return None
+
+
+def get_bearer_token():
+    authorization = request.headers.get("Authorization", "")
+
+    if not authorization.startswith("Bearer "):
+        return None
+
+    token = authorization[7:].strip()
+    return token or None
 
 @app.get("/health")
 def health():
@@ -200,6 +239,164 @@ def register_user():
         }
     ), 201
 
+@app.post("/api/auth/login")
+def login_user():
+    payload = request.get_json(silent=True)
+
+    if not isinstance(payload, dict):
+        return jsonify(
+            {
+                "error": "INVALID_LOGIN",
+                "detail": "INVALID_JSON",
+            }
+        ), 400
+
+    email = payload.get("email")
+    password = payload.get("password")
+    requested_role = payload.get("requested_role")
+
+    if not isinstance(email, str) or not email.strip():
+        return jsonify(
+            {
+                "error": "INVALID_LOGIN",
+                "detail": "INVALID_EMAIL",
+            }
+        ), 400
+
+    if not isinstance(password, str) or not password:
+        return jsonify(
+            {
+                "error": "INVALID_LOGIN",
+                "detail": "INVALID_PASSWORD",
+            }
+        ), 400
+
+    if requested_role not in ("user", "admin"):
+        return jsonify(
+            {
+                "error": "INVALID_LOGIN",
+                "detail": "INVALID_ROLE",
+            }
+        ), 400
+
+    normalized_email = email.strip().lower()
+
+    try:
+        with get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        user_id,
+                        email,
+                        name,
+                        phone,
+                        address,
+                        role,
+                        is_active,
+                        password_hash
+                    FROM users
+                    WHERE lower(email) = lower(%s)
+                    """,
+                    (normalized_email,),
+                )
+
+                user = cursor.fetchone()
+
+    except Exception:
+        logging.exception("Error al iniciar sesión")
+        return jsonify({"error": "DATABASE_UNAVAILABLE"}), 503
+
+    if user is None:
+        return jsonify({"error": "INVALID_CREDENTIALS"}), 401
+
+    if not check_password_hash(user[7], password):
+        return jsonify({"error": "INVALID_CREDENTIALS"}), 401
+
+    if not user[6]:
+        return jsonify({"error": "ACCOUNT_INACTIVE"}), 403
+
+    if user[5] != requested_role:
+        return jsonify(
+            {
+                "error": "ROLE_ACCESS_DENIED",
+                "requested_role": requested_role,
+            }
+        ), 403
+
+    token = create_auth_token(user[0])
+
+    return jsonify(
+        {
+            "token": token,
+            "user": {
+                "user_id": user[0],
+                "email": user[1],
+                "name": user[2],
+                "phone": user[3],
+                "address": user[4],
+                "role": user[5],
+                "is_active": user[6],
+            },
+        }
+    ), 200
+
+
+@app.get("/api/auth/session")
+def get_auth_session():
+    token = get_bearer_token()
+
+    if token is None:
+        return jsonify({"error": "AUTH_REQUIRED"}), 401
+
+    session_data = decode_auth_token(token)
+
+    if session_data is None:
+        return jsonify({"error": "INVALID_SESSION"}), 401
+
+    user_id = session_data.get("user_id")
+
+    try:
+        with get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        user_id,
+                        email,
+                        name,
+                        phone,
+                        address,
+                        role,
+                        is_active
+                    FROM users
+                    WHERE user_id = %s
+                    """,
+                    (user_id,),
+                )
+
+                user = cursor.fetchone()
+
+    except Exception:
+        logging.exception("Error al validar sesión")
+        return jsonify({"error": "DATABASE_UNAVAILABLE"}), 503
+
+    if user is None or not user[6]:
+        return jsonify({"error": "INVALID_SESSION"}), 401
+
+    return jsonify(
+        {
+            "user": {
+                "user_id": user[0],
+                "email": user[1],
+                "name": user[2],
+                "phone": user[3],
+                "address": user[4],
+                "role": user[5],
+                "is_active": user[6],
+            }
+        }
+    ), 200
 
 @app.get("/api/products")
 def list_products():
