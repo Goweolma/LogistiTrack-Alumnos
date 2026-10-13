@@ -2,8 +2,10 @@
 
 import logging
 import os
+import re
 
-
+from psycopg.errors import UniqueViolation
+from werkzeug.security import generate_password_hash
 from flask import Flask, jsonify, request
 from common.database import get_connection
 from common.events import build_event
@@ -29,6 +31,174 @@ def platform_health():
             "message": "La infraestructura funciona; el flujo aún debe implementarse.",
         }
     )
+
+@app.post("/api/auth/register")
+def register_user():
+    payload = request.get_json(silent=True)
+
+    if not isinstance(payload, dict):
+        return jsonify(
+            {
+                "error": "INVALID_USER",
+                "detail": "INVALID_JSON",
+            }
+        ), 400
+
+    name = payload.get("name")
+    email = payload.get("email")
+    phone = payload.get("phone")
+    address = payload.get("address")
+    password = payload.get("password")
+
+    if (
+        not isinstance(name, str)
+        or not name.strip()
+        or len(name.strip()) > 120
+    ):
+        return jsonify(
+            {
+                "error": "INVALID_USER",
+                "detail": "INVALID_NAME",
+            }
+        ), 400
+
+    if (
+        not isinstance(email, str)
+        or len(email.strip()) > 254
+        or re.fullmatch(
+            r"[^@\s]+@[^@\s]+\.[^@\s]+",
+            email.strip(),
+        ) is None
+    ):
+        return jsonify(
+            {
+                "error": "INVALID_USER",
+                "detail": "INVALID_EMAIL",
+            }
+        ), 400
+
+    if (
+        phone is not None
+        and (
+            not isinstance(phone, str)
+            or re.fullmatch(r"\+?[0-9]{10,15}", phone.strip()) is None
+        )
+    ):
+        return jsonify(
+            {
+                "error": "INVALID_USER",
+                "detail": "INVALID_PHONE",
+            }
+        ), 400
+
+    if (
+        address is not None
+        and (
+            not isinstance(address, str)
+            or len(address.strip()) > 200
+        )
+    ):
+        return jsonify(
+            {
+                "error": "INVALID_USER",
+                "detail": "INVALID_ADDRESS",
+            }
+        ), 400
+
+    if not isinstance(password, str) or len(password) < 8:
+        return jsonify(
+            {
+                "error": "INVALID_USER",
+                "detail": "INVALID_PASSWORD",
+            }
+        ), 400
+
+    normalized_email = email.strip().lower()
+    normalized_name = name.strip()
+    normalized_phone = phone.strip() if isinstance(phone, str) else None
+    normalized_address = address.strip() if isinstance(address, str) else None
+    password_hash = generate_password_hash(password)
+
+    try:
+        with get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT user_id
+                    FROM users
+                    WHERE lower(email) = lower(%s)
+                    """,
+                    (normalized_email,),
+                )
+
+                if cursor.fetchone() is not None:
+                    return jsonify(
+                        {
+                            "error": "USER_ALREADY_EXISTS",
+                            "email": normalized_email,
+                        }
+                    ), 409
+
+                cursor.execute(
+                    """
+                    INSERT INTO users (
+                        email,
+                        name,
+                        phone,
+                        address,
+                        role,
+                        password_hash
+                    )
+                    VALUES (%s, %s, %s, %s, 'user', %s)
+                    RETURNING
+                        user_id,
+                        email,
+                        name,
+                        phone,
+                        address,
+                        role,
+                        is_active
+                    """,
+                    (
+                        normalized_email,
+                        normalized_name,
+                        normalized_phone,
+                        normalized_address,
+                        password_hash,
+                    ),
+                )
+
+                user = cursor.fetchone()
+
+    except UniqueViolation:
+        logging.info(
+            "Intento de registrar correo duplicado: %s",
+            normalized_email,
+        )
+        return jsonify(
+            {
+                "error": "USER_ALREADY_EXISTS",
+                "email": normalized_email,
+            }
+        ), 409
+
+    except Exception:
+        logging.exception("Error al registrar usuario")
+        return jsonify({"error": "DATABASE_UNAVAILABLE"}), 503
+
+    return jsonify(
+        {
+            "user": {
+                "user_id": user[0],
+                "email": user[1],
+                "name": user[2],
+                "phone": user[3],
+                "address": user[4],
+                "role": user[5],
+                "is_active": user[6],
+            }
+        }
+    ), 201
 
 
 @app.get("/api/products")
@@ -61,6 +231,60 @@ def list_products():
 
     return jsonify(products)
 
+@app.get("/api/package-sizes")
+def list_package_sizes():
+    try:
+        with get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        package_size_id,
+                        name,
+                        length_cm,
+                        width_cm,
+                        height_cm,
+                        max_weight_kg,
+                        price,
+                        is_active
+                    FROM package_sizes
+                    WHERE is_active = TRUE
+                    ORDER BY price, package_size_id
+                    """
+                )
+                rows = cursor.fetchall()
+
+    except Exception:
+        logging.exception("Error al consultar tamaños de paquete")
+        return jsonify({"error": "DATABASE_UNAVAILABLE"}), 503
+
+    package_sizes = [
+        {
+            "package_size_id": package_size_id,
+            "name": name,
+            "dimensions": {
+                "length": float(length_cm),
+                "width": float(width_cm),
+                "height": float(height_cm),
+                "unit": "cm",
+            },
+            "max_weight_kg": float(max_weight_kg),
+            "price": float(price),
+            "is_active": is_active,
+        }
+        for (
+            package_size_id,
+            name,
+            length_cm,
+            width_cm,
+            height_cm,
+            max_weight_kg,
+            price,
+            is_active,
+        ) in rows
+    ]
+
+    return jsonify(package_sizes)
 
 @app.get("/api/orders")
 def list_orders():
@@ -234,7 +458,6 @@ def cancel_order(order_id: str):
             "status": "CANCELLED",
         }
     ), 200
-   
 def validate_order_payload(payload):
     if not isinstance(payload, dict):
         return "INVALID_JSON"
