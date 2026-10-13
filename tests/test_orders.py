@@ -763,6 +763,50 @@ def test_register_returns_409_when_email_already_exists(monkeypatch):
         for query in cursor.queries
     )
 
+def test_register_returns_409_on_unique_violation(monkeypatch):
+    class DuplicateEmailCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def execute(self, query, params=None):
+            query = " ".join(query.split())
+
+            if query.startswith("SELECT user_id"):
+                self.current = None
+
+            elif query.startswith("INSERT INTO users"):
+                raise orders.UniqueViolation("duplicate email")
+
+        def fetchone(self):
+            return self.current
+
+    cursor = DuplicateEmailCursor()
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    client = orders.app.test_client()
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "name": "Fer",
+            "email": "fer@correo.com",
+            "password": "password123",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.get_json() == {
+        "error": "USER_ALREADY_EXISTS",
+        "email": "fer@correo.com",
+    }
+
 @pytest.mark.parametrize(
     "payload, detail",
     [
@@ -789,6 +833,40 @@ def test_register_returns_409_when_email_already_exists(monkeypatch):
                 "password": "123",
             },
             "INVALID_PASSWORD",
+        ),
+                (
+            {
+                "name": "A" * 121,
+                "email": "fer@correo.com",
+                "password": "password123",
+            },
+            "INVALID_NAME",
+        ),
+        (
+            {
+                "name": "Fer",
+                "email": "fer@correo",
+                "password": "password123",
+            },
+            "INVALID_EMAIL",
+        ),
+        (
+            {
+                "name": "Fer",
+                "email": "fer@correo.com",
+                "phone": "12345",
+                "password": "password123",
+            },
+            "INVALID_PHONE",
+        ),
+        (
+            {
+                "name": "Fer",
+                "email": "fer@correo.com",
+                "address": "A" * 201,
+                "password": "password123",
+            },
+            "INVALID_ADDRESS",
         ),
     ],
 )

@@ -2,8 +2,9 @@
 
 import logging
 import os
+import re
 
-
+from psycopg.errors import UniqueViolation
 from werkzeug.security import generate_password_hash
 from flask import Flask, jsonify, request
 from common.database import get_connection
@@ -49,7 +50,11 @@ def register_user():
     address = payload.get("address")
     password = payload.get("password")
 
-    if not isinstance(name, str) or not name.strip():
+    if (
+        not isinstance(name, str)
+        or not name.strip()
+        or len(name.strip()) > 120
+    ):
         return jsonify(
             {
                 "error": "INVALID_USER",
@@ -57,11 +62,46 @@ def register_user():
             }
         ), 400
 
-    if not isinstance(email, str) or "@" not in email:
+    if (
+        not isinstance(email, str)
+        or len(email.strip()) > 254
+        or re.fullmatch(
+            r"[^@\s]+@[^@\s]+\.[^@\s]+",
+            email.strip(),
+        ) is None
+    ):
         return jsonify(
             {
                 "error": "INVALID_USER",
                 "detail": "INVALID_EMAIL",
+            }
+        ), 400
+
+    if (
+        phone is not None
+        and (
+            not isinstance(phone, str)
+            or re.fullmatch(r"\+?[0-9]{10,15}", phone.strip()) is None
+        )
+    ):
+        return jsonify(
+            {
+                "error": "INVALID_USER",
+                "detail": "INVALID_PHONE",
+            }
+        ), 400
+
+    if (
+        address is not None
+        and (
+            not isinstance(address, str)
+            or len(address.strip()) > 200
+        )
+    ):
+        return jsonify(
+            {
+                "error": "INVALID_USER",
+                "detail": "INVALID_ADDRESS",
             }
         ), 400
 
@@ -129,6 +169,18 @@ def register_user():
                 )
 
                 user = cursor.fetchone()
+
+    except UniqueViolation:
+        logging.info(
+            "Intento de registrar correo duplicado: %s",
+            normalized_email,
+        )
+        return jsonify(
+            {
+                "error": "USER_ALREADY_EXISTS",
+                "email": normalized_email,
+            }
+        ), 409
 
     except Exception:
         logging.exception("Error al registrar usuario")
