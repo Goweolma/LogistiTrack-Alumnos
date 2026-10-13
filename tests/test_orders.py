@@ -663,6 +663,222 @@ def test_cancel_order_rejects_when_status_is_not_received(monkeypatch):
         "INSERT INTO order_history" in query
         for query in cursor.queries
     )
+def test_register_forces_user_role_even_if_admin_is_requested(monkeypatch):
+    class RegisterCursor:
+        def __init__(self):
+            self.current = None
+            self.queries = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def execute(self, query, params=None):
+            query = " ".join(query.split())
+            self.queries.append((query, params))
+
+            if query.startswith("SELECT user_id"):
+                self.current = None
+
+            elif query.startswith("INSERT INTO users"):
+                self.current = (
+                    1,
+                    "fer@correo.com",
+                    "Fer",
+                    "4491234567",
+                    "Aguascalientes",
+                    "user",
+                    True,
+                )
+
+        def fetchone(self):
+            return self.current
+
+    cursor = RegisterCursor()
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    client = orders.app.test_client()
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "name": "Fer",
+            "email": "FER@correo.com",
+            "phone": "4491234567",
+            "address": "Aguascalientes",
+            "password": "password123",
+            "role": "admin",
+        },
+    )
+
+    assert response.status_code == 201
+
+    data = response.get_json()
+    assert data["user"]["role"] == "user"
+    assert data["user"]["email"] == "fer@correo.com"
+
+    insert_query, insert_params = next(
+        (query, params)
+        for query, params in cursor.queries
+        if query.startswith("INSERT INTO users")
+    )
+
+    assert "'user'" in insert_query
+    assert "admin" not in insert_params
+    assert "password123" not in insert_params
+
+def test_register_returns_409_when_email_already_exists(monkeypatch):
+    cursor = FakeCursor(order=(1,))
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    client = orders.app.test_client()
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "name": "Fer",
+            "email": "fer@correo.com",
+            "password": "password123",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.get_json() == {
+        "error": "USER_ALREADY_EXISTS",
+        "email": "fer@correo.com",
+    }
+
+    assert not any(
+        "INSERT INTO users" in query
+        for query in cursor.queries
+    )
+
+def test_register_returns_409_on_unique_violation(monkeypatch):
+    class DuplicateEmailCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def execute(self, query, params=None):
+            query = " ".join(query.split())
+
+            if query.startswith("SELECT user_id"):
+                self.current = None
+
+            elif query.startswith("INSERT INTO users"):
+                raise orders.UniqueViolation("duplicate email")
+
+        def fetchone(self):
+            return self.current
+
+    cursor = DuplicateEmailCursor()
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    client = orders.app.test_client()
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "name": "Fer",
+            "email": "fer@correo.com",
+            "password": "password123",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.get_json() == {
+        "error": "USER_ALREADY_EXISTS",
+        "email": "fer@correo.com",
+    }
+
+@pytest.mark.parametrize(
+    "payload, detail",
+    [
+        (
+            {
+                "name": "",
+                "email": "fer@correo.com",
+                "password": "password123",
+            },
+            "INVALID_NAME",
+        ),
+        (
+            {
+                "name": "Fer",
+                "email": "correo-invalido",
+                "password": "password123",
+            },
+            "INVALID_EMAIL",
+        ),
+        (
+            {
+                "name": "Fer",
+                "email": "fer@correo.com",
+                "password": "123",
+            },
+            "INVALID_PASSWORD",
+        ),
+                (
+            {
+                "name": "A" * 121,
+                "email": "fer@correo.com",
+                "password": "password123",
+            },
+            "INVALID_NAME",
+        ),
+        (
+            {
+                "name": "Fer",
+                "email": "fer@correo",
+                "password": "password123",
+            },
+            "INVALID_EMAIL",
+        ),
+        (
+            {
+                "name": "Fer",
+                "email": "fer@correo.com",
+                "phone": "12345",
+                "password": "password123",
+            },
+            "INVALID_PHONE",
+        ),
+        (
+            {
+                "name": "Fer",
+                "email": "fer@correo.com",
+                "address": "A" * 201,
+                "password": "password123",
+            },
+            "INVALID_ADDRESS",
+        ),
+    ],
+)
+def test_register_rejects_invalid_data(payload, detail):
+    client = orders.app.test_client()
+    response = client.post("/api/auth/register", json=payload)
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": "INVALID_USER",
+        "detail": detail,
+    }
 
 def test_list_package_sizes_returns_active_catalog(monkeypatch):
     cursor = FakeCursor(
