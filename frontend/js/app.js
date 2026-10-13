@@ -1,7 +1,7 @@
 const app = document.querySelector('#app');
 const nav = document.querySelector('#navigation');
 const $ = (selector, root = document) => root.querySelector(selector);
-const state = { packageSizes: [], orders: [], inventory: null };
+const state = { packageSizes: [], orders: [], inventory: null, sessionUser: null, authCheckId: 0 };
 
 const routes = {
   '/acceso': { role: null, title: 'Bienvenido a Ray-o', eyebrow: 'ENVÍOS SENCILLOS', render: renderAccess },
@@ -45,7 +45,7 @@ function setPage(route) {
   nav.innerHTML = `${menus[route.role].map(([path, icon, label]) => `<a class="nav-link ${active === path ? 'active' : ''}" href="#${path}"><span class="nav-icon">${icon}</span>${label}</a>`).join('')}<button class="nav-link logout-link" id="logoutButton" type="button"><span class="nav-icon">↪</span>Cerrar sesión</button>`;
   $('#logoutButton').addEventListener('click', logout);
 }
-function resolveRoute() {
+async function resolveRoute() {
   let path = (location.hash.slice(1).split('?')[0]) || '/acceso';
   if (path === '/salud') path = '/admin/salud';
   if (path === '/pedido') path = '/usuario/pedido';
@@ -54,7 +54,14 @@ function resolveRoute() {
   if (path === '/inventario') path = '/admin/inventario';
   if (!routes[path]) { location.hash = '#/acceso'; return; }
   const route = routes[path];
-  const user = getSessionUser();
+  const checkId = ++state.authCheckId;
+  app.innerHTML = '<div class="loading-card">Verificando sesión…</div>';
+  let user = null;
+  let sessionError = null;
+  try { user = await fetchSessionUser(); }
+  catch (error) { sessionError = error; }
+  if (checkId !== state.authCheckId) return;
+  state.sessionUser = user;
   if (route.role && !user) { location.hash = '#/acceso'; return; }
   if (route.role && user.role !== route.role) {
     location.hash = user.role === 'admin' ? '#/admin/tablero' : '#/usuario/pedido';
@@ -66,20 +73,31 @@ function resolveRoute() {
   }
   setPage(route);
   route.render();
+  if (!route.role && sessionError && ![401, 403].includes(sessionError.status)) {
+    $('#accessPanel').prepend(notice(`No se pudo verificar la sesión: ${sessionError.message}`, 'error'));
+  }
 }
-function getSessionUser() {
-  try { return JSON.parse(sessionStorage.getItem('rayOUser') || 'null'); }
-  catch { sessionStorage.removeItem('rayOUser'); return null; }
+async function fetchSessionUser() {
+  const data = await api('/api/auth/me');
+  const user = data.user || data;
+  const role = normalizeRole(user.role);
+  if (!role) throw new Error('La API de sesión no devolvió un rol válido.');
+  return { ...user, role };
 }
-function logout() {
-  sessionStorage.removeItem('rayOUser');
-  sessionStorage.removeItem('rayOToken');
-  location.hash = '#/acceso';
-  resolveRoute();
+async function logout() {
+  const button = $('#logoutButton');
+  if (button) { button.disabled = true; button.textContent = 'Cerrando sesión…'; }
+  try {
+    await api('/api/auth/logout', { method: 'POST' });
+    state.sessionUser = null;
+    location.hash = '#/acceso';
+  } catch (error) {
+    if (button) { button.disabled = false; button.innerHTML = '<span class="nav-icon">↪</span>Cerrar sesión'; }
+    window.alert(`No se pudo cerrar la sesión en el servidor: ${error.message}`);
+  }
 }
 async function api(path, options = {}) {
-  const token = sessionStorage.getItem('rayOToken');
-  const response = await fetch(path, { headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(options.headers || {}) }, ...options });
+  const response = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...options });
   let data = {};
   try { data = await response.json(); } catch { data = {}; }
   if (!response.ok) {
@@ -126,11 +144,11 @@ async function loginByEmail(event, requestedRole) {
   const email = $('#loginEmail').value.trim();
   const password = $('#loginPassword').value;
   try {
-    const data = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password, requested_role: requestedRole === 'admin' ? 'admin' : 'user' }) });
-    const user = data.user || data;
-    const role = normalizeRole(user.role || data.role);
+    await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password, requested_role: requestedRole === 'admin' ? 'admin' : 'user' }) });
+    const user = await fetchSessionUser();
+    const role = user.role;
     if (role !== requestedRole) throw new Error('El correo no tiene acceso a esta interfaz.');
-    establishSession(user, role, email, data.token || data.access_token);
+    establishSession(user, role);
   } catch (error) {
     $('#authNotice').innerHTML = notice(error.message || 'No fue posible iniciar sesión.', 'error');
     button.disabled = false; button.textContent = 'Continuar →';
@@ -148,9 +166,19 @@ async function registerUser(event) {
   }
   const account = { name: $('#registerName').value.trim(), email: $('#registerEmail').value.trim(), phone: $('#registerPhone').value.trim(), address: $('#registerAddress').value.trim(), password };
   try {
-    const data = await api('/api/auth/register', { method: 'POST', body: JSON.stringify(account) });
-    const user = data.user || { ...account, ...(data.profile || {}) };
-    establishSession(user, 'usuario', account.email, data.token || data.access_token);
+    await api('/api/auth/register', { method: 'POST', body: JSON.stringify(account) });
+    try {
+      const user = await fetchSessionUser();
+      if (user.role !== 'usuario') throw new Error('La cuenta creada no tiene rol de usuario.');
+      establishSession(user, 'usuario');
+    } catch (error) {
+      if (error.status === 401 || error.status === 403) {
+        renderEmailLogin('usuario');
+        $('#authNotice').innerHTML = notice('Cuenta creada. Inicia sesión para continuar.', 'success');
+        return;
+      }
+      throw new Error(`La cuenta se creó, pero no se pudo validar la sesión: ${error.message}`);
+    }
   } catch (error) {
     $('#authNotice').innerHTML = notice(error.message || 'No fue posible crear la cuenta.', 'error');
     button.disabled = false; button.textContent = 'Crear cuenta →';
@@ -160,10 +188,9 @@ function normalizeRole(role = '') {
   const value = String(role).toLowerCase();
   return ['admin', 'administrator', 'administrador'].includes(value) ? 'admin' : ['user', 'usuario', 'customer'].includes(value) ? 'usuario' : '';
 }
-function establishSession(user, role, email, token) {
+function establishSession(user, role) {
   if (!role) throw new Error('La API no devolvió el rol de la cuenta.');
-  sessionStorage.setItem('rayOUser', JSON.stringify({ ...user, email: user.email || email, role }));
-  if (token) sessionStorage.setItem('rayOToken', token);
+  state.sessionUser = user;
   location.hash = role === 'admin' ? '#/admin/tablero' : '#/usuario/pedido';
 }
 function stat(label, value, note, icon, positive = false) {
