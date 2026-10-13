@@ -752,7 +752,7 @@ def test_list_package_sizes_returns_503_when_database_fails(monkeypatch):
     assert response.get_json() == {
         "error": "DATABASE_UNAVAILABLE"
     }
-    
+
 def test_cancel_order_returns_503_when_database_fails(monkeypatch):
     def broken_connection():
         raise RuntimeError("Database unavailable")
@@ -866,4 +866,139 @@ def test_cancel_order_rejects_second_cancellation(monkeypatch):
     assert not any(
         "INSERT INTO order_history" in query
         for query in cursor.queries
+    )
+def test_create_order_with_package_size_persists_confirmed_price(monkeypatch):
+    class PackageCursor:
+        def __init__(self):
+            self.current = None
+            self.queries = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def execute(self, query, params=None):
+            query = " ".join(query.split())
+            self.queries.append((query, params))
+
+            if "SELECT price FROM package_sizes" in query:
+                self.current = (189.0,)
+            elif "INSERT INTO orders" in query:
+                self.current = ("PED-000002",)
+
+        def fetchone(self):
+            return self.current
+
+    cursor = PackageCursor()
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    def unexpected_producer():
+        raise AssertionError(
+            "No debe publicarse ORDER_CREATED sin items"
+        )
+
+    monkeypatch.setattr(
+        orders,
+        "create_producer",
+        unexpected_producer,
+    )
+
+    client = orders.app.test_client()
+    response = client.post(
+        "/api/orders",
+        json={
+            "package_size_id": "PKG-M",
+            "delivery_address": "Aguascalientes",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.get_json() == {
+        "order_id": "PED-000002",
+        "status": "RECEIVED",
+        "total": 189.0,
+        "package_size_id": "PKG-M",
+        "confirmed_price": 189.0,
+    }
+
+    assert any(
+        "FROM package_sizes" in query
+        and "is_active = TRUE" in query
+        for query, _ in cursor.queries
+    )
+
+    assert any(
+        "package_size_id" in query
+        and "confirmed_price" in query
+        for query, _ in cursor.queries
+        if "INSERT INTO orders" in query
+    )
+
+    assert not any(
+        "INSERT INTO order_items" in query
+        for query, _ in cursor.queries
+    )
+
+    assert any(
+        "INSERT INTO order_history" in query
+        for query, _ in cursor.queries
+    )
+
+
+def test_create_order_rejects_unavailable_package_size(monkeypatch):
+    class PackageCursor:
+        def __init__(self):
+            self.current = None
+            self.queries = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+        def execute(self, query, params=None):
+            query = " ".join(query.split())
+            self.queries.append((query, params))
+
+            if "SELECT price FROM package_sizes" in query:
+                self.current = None
+
+        def fetchone(self):
+            return self.current
+
+    cursor = PackageCursor()
+
+    monkeypatch.setattr(
+        orders,
+        "get_connection",
+        lambda: FakeConnection(cursor),
+    )
+
+    client = orders.app.test_client()
+    response = client.post(
+        "/api/orders",
+        json={
+            "package_size_id": "PKG-NO-EXISTE",
+            "delivery_address": "Aguascalientes",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": "INVALID_ORDER",
+        "detail": "PACKAGE_SIZE_NOT_AVAILABLE",
+        "package_size_id": "PKG-NO-EXISTE",
+    }
+
+    assert not any(
+        "INSERT INTO orders" in query
+        for query, _ in cursor.queries
     )
