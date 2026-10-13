@@ -61,6 +61,60 @@ def list_products():
 
     return jsonify(products)
 
+@app.get("/api/package-sizes")
+def list_package_sizes():
+    try:
+        with get_connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        package_size_id,
+                        name,
+                        length_cm,
+                        width_cm,
+                        height_cm,
+                        max_weight_kg,
+                        price,
+                        is_active
+                    FROM package_sizes
+                    WHERE is_active = TRUE
+                    ORDER BY price, package_size_id
+                    """
+                )
+                rows = cursor.fetchall()
+
+    except Exception:
+        logging.exception("Error al consultar tamaños de paquete")
+        return jsonify({"error": "DATABASE_UNAVAILABLE"}), 503
+
+    package_sizes = [
+        {
+            "package_size_id": package_size_id,
+            "name": name,
+            "dimensions": {
+                "length": float(length_cm),
+                "width": float(width_cm),
+                "height": float(height_cm),
+                "unit": "cm",
+            },
+            "max_weight_kg": float(max_weight_kg),
+            "price": float(price),
+            "is_active": is_active,
+        }
+        for (
+            package_size_id,
+            name,
+            length_cm,
+            width_cm,
+            height_cm,
+            max_weight_kg,
+            price,
+            is_active,
+        ) in rows
+    ]
+
+    return jsonify(package_sizes)
 
 @app.get("/api/orders")
 def list_orders():
