@@ -1,9 +1,10 @@
 const app = document.querySelector('#app');
 const nav = document.querySelector('#navigation');
 const $ = (selector, root = document) => root.querySelector(selector);
-const state = { packageSizes: [], orders: [], inventory: null };
+const state = { packageSizes: [], orders: [], inventory: null, sessionUser: null, authCheckId: 0 };
 
 const routes = {
+  '/acceso': { role: null, title: 'Bienvenido a Ray-o', eyebrow: 'ENVÍOS SENCILLOS', render: renderAccess },
   '/usuario/pedido': { role: 'usuario', title: 'Crear un pedido', eyebrow: 'ESPACIO DE USUARIO', render: renderNewOrder },
   '/usuario/seguimiento': { role: 'usuario', title: 'Seguimiento', eyebrow: 'ESPACIO DE USUARIO', render: renderTracking },
   '/admin/tablero': { role: 'admin', title: 'Panel de operaciones', eyebrow: 'CENTRO DE CONTROL', render: renderDashboard },
@@ -36,25 +37,67 @@ function badge(status) { const value = status || 'SIN DATOS'; return `<span clas
 function setPage(route) {
   document.querySelector('#pageTitle').textContent = route.title;
   document.querySelector('#pageEyebrow').textContent = route.eyebrow;
+  document.querySelector('.app-shell').classList.toggle('access-mode', !route.role);
+  if (!route.role) { nav.innerHTML = ''; return; }
   const active = (location.hash.slice(1).split('?')[0]) || '/usuario/pedido';
   document.querySelectorAll('[data-role-link]').forEach(link => link.classList.toggle('active', link.dataset.roleLink === route.role));
   document.querySelector('#navLabel').textContent = route.role === 'admin' ? 'ADMINISTRACIÓN' : 'MI ESPACIO';
-  nav.innerHTML = menus[route.role].map(([path, icon, label]) => `<a class="nav-link ${active === path ? 'active' : ''}" href="#${path}"><span class="nav-icon">${icon}</span>${label}</a>`).join('');
+  nav.innerHTML = `${menus[route.role].map(([path, icon, label]) => `<a class="nav-link ${active === path ? 'active' : ''}" href="#${path}"><span class="nav-icon">${icon}</span>${label}</a>`).join('')}<button class="nav-link logout-link" id="logoutButton" type="button"><span class="nav-icon">↪</span>Cerrar sesión</button>`;
+  $('#logoutButton').addEventListener('click', logout);
 }
-function resolveRoute() {
-  let path = (location.hash.slice(1).split('?')[0]) || '/usuario/pedido';
+async function resolveRoute() {
+  let path = (location.hash.slice(1).split('?')[0]) || '/acceso';
   if (path === '/salud') path = '/admin/salud';
   if (path === '/pedido') path = '/usuario/pedido';
   if (path === '/tablero') path = '/admin/pedidos';
   if (path === '/seguimiento') path = '/usuario/seguimiento';
   if (path === '/inventario') path = '/admin/inventario';
-  if (!routes[path]) { location.hash = '#/usuario/pedido'; return; }
+  if (!routes[path]) { location.hash = '#/acceso'; return; }
   const route = routes[path];
+  const checkId = ++state.authCheckId;
+  app.innerHTML = '<div class="loading-card">Verificando sesión…</div>';
+  let user = null;
+  let sessionError = null;
+  try { user = await fetchSessionUser(); }
+  catch (error) { sessionError = error; }
+  if (checkId !== state.authCheckId) return;
+  state.sessionUser = user;
+  if (route.role && !user) { location.hash = '#/acceso'; return; }
+  if (route.role && user.role !== route.role) {
+    location.hash = user.role === 'admin' ? '#/admin/tablero' : '#/usuario/pedido';
+    return;
+  }
+  if (!route.role && user) {
+    location.hash = user.role === 'admin' ? '#/admin/tablero' : '#/usuario/pedido';
+    return;
+  }
   setPage(route);
   route.render();
+  if (!route.role && sessionError && ![401, 403].includes(sessionError.status)) {
+    $('#accessPanel').prepend(notice(`No se pudo verificar la sesión: ${sessionError.message}`, 'error'));
+  }
+}
+async function fetchSessionUser() {
+  const data = await api('/api/auth/me');
+  const user = data.user || data;
+  const role = normalizeRole(user.role);
+  if (!role) throw new Error('La API de sesión no devolvió un rol válido.');
+  return { ...user, role };
+}
+async function logout() {
+  const button = $('#logoutButton');
+  if (button) { button.disabled = true; button.textContent = 'Cerrando sesión…'; }
+  try {
+    await api('/api/auth/logout', { method: 'POST' });
+    state.sessionUser = null;
+    location.hash = '#/acceso';
+  } catch (error) {
+    if (button) { button.disabled = false; button.innerHTML = '<span class="nav-icon">↪</span>Cerrar sesión'; }
+    window.alert(`No se pudo cerrar la sesión en el servidor: ${error.message}`);
+  }
 }
 async function api(path, options = {}) {
-  const response = await fetch(path, { headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...options });
+  const response = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...options });
   let data = {};
   try { data = await response.json(); } catch { data = {}; }
   if (!response.ok) {
@@ -68,6 +111,88 @@ function pageHeading(title, subtitle, action = '') {
   return `<div class="page-heading"><div><h2>${title}</h2><p>${subtitle}</p></div>${action}</div>`;
 }
 function notice(text, type = '') { return `<div class="notice ${type}" role="status">${escapeHtml(text)}</div>`; }
+function renderAccess() {
+  app.innerHTML = `<section class="access-card"><a class="access-brand" href="#/acceso"><span class="brand-mark">R</span><span>Ray-o<small>ENVÍOS SENCILLOS</small></span></a><p class="eyebrow access-eyebrow">BIENVENIDO</p><h2>¿Cómo quieres continuar?</h2><p class="access-intro">Elige tu tipo de cuenta para entrar a Ray-o.</p><div id="accessPanel"></div></section>`;
+  renderRoleChoices();
+}
+function renderRoleChoices() {
+  $('#accessPanel').innerHTML = `<div class="role-choices"><button class="role-card" id="chooseUser" type="button"><span class="role-card-icon">♙</span><strong>Soy usuario</strong><span>Crear y seguir mis envíos</span><span class="role-arrow">→</span></button><button class="role-card" id="chooseAdmin" type="button"><span class="role-card-icon admin-icon">▦</span><strong>Soy administrador</strong><span>Entrar al panel de operaciones</span><span class="role-arrow">→</span></button></div>`;
+  $('#chooseUser').addEventListener('click', renderUserOptions);
+  $('#chooseAdmin').addEventListener('click', () => renderEmailLogin('admin'));
+}
+function renderUserOptions() {
+  $('#accessPanel').innerHTML = `<div class="auth-options"><button class="btn" id="createAccount" type="button">Crear cuenta</button><button class="btn secondary" id="existingAccount" type="button">Ya tengo una cuenta</button><button class="back-link" id="backToRoles" type="button">← Volver</button></div>`;
+  $('#createAccount').addEventListener('click', renderRegistration);
+  $('#existingAccount').addEventListener('click', () => renderEmailLogin('usuario'));
+  $('#backToRoles').addEventListener('click', renderRoleChoices);
+}
+function renderEmailLogin(role) {
+  const title = role === 'admin' ? 'Acceso de administrador' : 'Iniciar sesión';
+  $('#accessPanel').innerHTML = `<form id="emailLoginForm" class="auth-form"><h3>${title}</h3><p>Ingresa el correo y la contraseña de tu cuenta. No enviaremos códigos temporales.</p><div class="field"><label for="loginEmail">Correo electrónico</label><input id="loginEmail" type="email" autocomplete="email" required placeholder="nombre@correo.com"></div><div class="field"><label for="loginPassword">Contraseña</label><input id="loginPassword" type="password" autocomplete="current-password" required placeholder="Tu contraseña"></div><div id="authNotice"></div><button class="btn auth-submit" type="submit">Continuar →</button><button class="back-link" id="authBack" type="button">← Volver</button></form>`;
+  $('#emailLoginForm').addEventListener('submit', event => loginByEmail(event, role));
+  $('#authBack').addEventListener('click', role === 'admin' ? renderRoleChoices : renderUserOptions);
+}
+function renderRegistration() {
+  $('#accessPanel').innerHTML = `<form id="registerForm" class="auth-form"><h3>Crear cuenta de usuario</h3><p>Completa tus datos para preparar tus envíos.</p><div class="field"><label for="registerName">Nombre completo</label><input id="registerName" name="name" autocomplete="name" required placeholder="Tu nombre"></div><div class="field"><label for="registerEmail">Correo electrónico</label><input id="registerEmail" name="email" type="email" autocomplete="email" required placeholder="nombre@correo.com"></div><div class="field"><label for="registerPhone">Número de teléfono</label><input id="registerPhone" name="phone" type="tel" autocomplete="tel" required placeholder="+52 55 1234 5678"></div><div class="field"><label for="registerAddress">Dirección</label><input id="registerAddress" name="address" autocomplete="street-address" required placeholder="Calle, número, colonia y ciudad"></div><div class="field"><label for="registerPassword">Contraseña</label><input id="registerPassword" name="password" type="password" autocomplete="new-password" minlength="8" required placeholder="Mínimo 8 caracteres"></div><div class="field"><label for="confirmPassword">Confirmar contraseña</label><input id="confirmPassword" type="password" autocomplete="new-password" minlength="8" required placeholder="Repite tu contraseña"></div><div id="authNotice"></div><button class="btn auth-submit" type="submit">Crear cuenta →</button><button class="back-link" id="authBack" type="button">← Volver</button></form>`;
+  $('#registerForm').addEventListener('submit', registerUser);
+  $('#authBack').addEventListener('click', renderUserOptions);
+}
+async function loginByEmail(event, requestedRole) {
+  event.preventDefault();
+  const button = $('#emailLoginForm button[type="submit"]');
+  button.disabled = true; button.textContent = 'Entrando…'; $('#authNotice').innerHTML = '';
+  const email = $('#loginEmail').value.trim();
+  const password = $('#loginPassword').value;
+  try {
+    await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password, requested_role: requestedRole === 'admin' ? 'admin' : 'user' }) });
+    const user = await fetchSessionUser();
+    const role = user.role;
+    if (role !== requestedRole) throw new Error('El correo no tiene acceso a esta interfaz.');
+    establishSession(user, role);
+  } catch (error) {
+    $('#authNotice').innerHTML = notice(error.message || 'No fue posible iniciar sesión.', 'error');
+    button.disabled = false; button.textContent = 'Continuar →';
+  }
+}
+async function registerUser(event) {
+  event.preventDefault();
+  const button = $('#registerForm button[type="submit"]');
+  button.disabled = true; button.textContent = 'Creando cuenta…'; $('#authNotice').innerHTML = '';
+  const password = $('#registerPassword').value;
+  if (password !== $('#confirmPassword').value) {
+    $('#authNotice').innerHTML = notice('Las contraseñas no coinciden.', 'error');
+    button.disabled = false; button.textContent = 'Crear cuenta →';
+    return;
+  }
+  const account = { name: $('#registerName').value.trim(), email: $('#registerEmail').value.trim(), phone: $('#registerPhone').value.trim(), address: $('#registerAddress').value.trim(), password };
+  try {
+    await api('/api/auth/register', { method: 'POST', body: JSON.stringify(account) });
+    try {
+      const user = await fetchSessionUser();
+      if (user.role !== 'usuario') throw new Error('La cuenta creada no tiene rol de usuario.');
+      establishSession(user, 'usuario');
+    } catch (error) {
+      if (error.status === 401 || error.status === 403) {
+        renderEmailLogin('usuario');
+        $('#authNotice').innerHTML = notice('Cuenta creada. Inicia sesión para continuar.', 'success');
+        return;
+      }
+      throw new Error(`La cuenta se creó, pero no se pudo validar la sesión: ${error.message}`);
+    }
+  } catch (error) {
+    $('#authNotice').innerHTML = notice(error.message || 'No fue posible crear la cuenta.', 'error');
+    button.disabled = false; button.textContent = 'Crear cuenta →';
+  }
+}
+function normalizeRole(role = '') {
+  const value = String(role).toLowerCase();
+  return ['admin', 'administrator', 'administrador'].includes(value) ? 'admin' : ['user', 'usuario', 'customer'].includes(value) ? 'usuario' : '';
+}
+function establishSession(user, role) {
+  if (!role) throw new Error('La API no devolvió el rol de la cuenta.');
+  state.sessionUser = user;
+  location.hash = role === 'admin' ? '#/admin/tablero' : '#/usuario/pedido';
+}
 function stat(label, value, note, icon, positive = false) {
   return `<article class="stat-card"><div class="stat-top"><span>${label}</span><span class="stat-icon">${icon}</span></div><strong>${value}</strong><span class="stat-note ${positive ? 'positive' : ''}">${note}</span></article>`;
 }
